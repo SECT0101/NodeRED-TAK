@@ -1,0 +1,117 @@
+[
+  {
+    "id": "8b8246272d20399b",
+    "type": "tab",
+    "label": "NWS River Forecasts (NWPS) → TAK",
+    "disabled": false,
+    "info": "NWS forecast river gauges, colored by the worst observed or forecast flood level (purple major, red moderate, orange minor, yellow action, green none). The forecast crest is in the marker remarks.\n\nData: NWS National Water Prediction Service (https://water.noaa.gov/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/nws-river-forecasts"
+  },
+  {
+    "id": "setup272d20399b",
+    "type": "comment",
+    "z": "8b8246272d20399b",
+    "name": "SETUP - read me (double-click)",
+    "info": "NWS forecast river gauges, colored by the worst observed or forecast flood level (purple major, red moderate, orange minor, yellow action, green none). The forecast crest is in the marker remarks.\n\nData: NWS National Water Prediction Service (https://water.noaa.gov/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/nws-river-forecasts",
+    "x": 190,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "2847e5859d0b62ae",
+    "type": "inject",
+    "z": "8b8246272d20399b",
+    "name": "Every 15 min",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "900",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "25",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 150,
+    "y": 120,
+    "wires": [
+      [
+        "69a43e65be8f9c8a"
+      ]
+    ]
+  },
+  {
+    "id": "69a43e65be8f9c8a",
+    "type": "http request",
+    "z": "8b8246272d20399b",
+    "name": "GET NWPS gauges (TN bbox)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://api.water.noaa.gov/nwps/v1/gauges?bbox.xmin=-91.2&bbox.ymin=34.3&bbox.xmax=-82.0&bbox.ymax=37.2&srid=EPSG_4326",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 430,
+    "y": 120,
+    "wires": [
+      [
+        "ccffc4d331f68da4"
+      ]
+    ]
+  },
+  {
+    "id": "ccffc4d331f68da4",
+    "type": "function",
+    "z": "8b8246272d20399b",
+    "name": "Build river gauge CoT",
+    "func": "function esc(s) { return String(s == null ? \"\" : s).replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\").replace(/'/g, \"&apos;\"); }\nfunction localTime(t) { const d = new Date(t); return isNaN(d) ? String(t || \"\") : d.toLocaleString(\"en-US\", { timeZone: \"America/Chicago\", month: \"short\", day: \"numeric\", hour: \"numeric\", minute: \"2-digit\", timeZoneName: \"short\" }); }\nfunction cotEvent(uid, type, lat, lon, staleMs, inner) {\n    const now = new Date(); const t = now.toISOString(); const st = new Date(now.getTime() + staleMs).toISOString();\n    return '<?xml version=\"1.0\" standalone=\"yes\"?><event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"' + type + '\" time=\"' + t + '\" start=\"' + t + '\" stale=\"' + st + '\" how=\"h-g-i-g-o\">' +\n        '<point lat=\"' + Number(lat).toFixed(5) + '\" lon=\"' + Number(lon).toFixed(5) + '\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/><detail>' + inner + '</detail></event>';\n}\n// NWS National Water Prediction Service -- forecast gauges, colored by flood category\nconst res = msg.payload;\nif (!res || !Array.isArray(res.gauges)) { node.status({ fill: \"red\", shape: \"ring\", text: \"bad NWPS response (HTTP \" + msg.statusCode + \")\" }); return null; }\nconst RANK = { major: 5, moderate: 4, minor: 3, action: 2, no_flooding: 1 };\nconst COLOR = { major: -3394561, moderate: -65536, minor: -26368, action: -256, no_flooding: -16711936, none: -9326615, stale: -4341061 };  // NWS AHPS colors\nconst LABEL = { major: \"MAJOR flooding\", moderate: \"Moderate flooding\", minor: \"Minor flooding\", action: \"Action stage\", no_flooding: \"No flooding\" };\nfunction fmt(s) {\n    if (!s || s.primary === -999 || s.primary == null) { return null; }\n    return s.primary + \" \" + (s.primaryUnit || \"\") + (s.secondary != null && s.secondary !== -999 ? \" / \" + s.secondary + \" \" + (s.secondaryUnit || \"\") : \"\");\n}\nconst out = []; const counts = {};\nres.gauges.forEach(function (g) {\n    const lat = Number(g.latitude), lon = Number(g.longitude);\n    if (!isFinite(lat) || !isFinite(lon)) { return; }\n    const obs = (g.status && g.status.observed) || {}, fc = (g.status && g.status.forecast) || {};\n    const oc = obs.floodCategory, fcat = fc.floodCategory;\n    const worst = (RANK[fcat] || 0) > (RANK[oc] || 0) ? fcat : oc;\n    const key = RANK[worst] ? worst : (oc === \"obs_not_current\" ? \"stale\" : \"none\");\n    counts[key] = (counts[key] || 0) + 1;\n    const parts = [\n        \"Observed: \" + (fmt(obs) || \"n/a\") + \" - \" + (LABEL[oc] || String(oc || \"n/a\").replace(/_/g, \" \")) + (obs.validTime && obs.validTime[0] !== \"0\" ? \" (\" + localTime(obs.validTime) + \")\" : \"\"),\n        fmt(fc) ? \"Forecast peak: \" + fmt(fc) + \" - \" + (LABEL[fcat] || String(fcat).replace(/_/g, \" \")) + (fc.validTime && fc.validTime[0] !== \"0\" ? \" (\" + localTime(fc.validTime) + \")\" : \"\") : \"No current forecast\",\n        \"NWS \" + g.lid + (g.rfc && g.rfc.abbreviation ? \" / \" + g.rfc.abbreviation : \"\"),\n        \"https://water.noaa.gov/gauges/\" + String(g.lid).toLowerCase()\n    ];\n    const tag = RANK[worst] >= 2 ? \" [\" + (LABEL[worst] || worst).toUpperCase() + \"]\" : \"\";\n    out.push({ payload: cotEvent(\"NWPS-\" + g.lid, \"b-m-p-s-m\", lat, lon, 20 * 60 * 1000,\n        '<contact callsign=\"' + esc((g.name || g.lid) + tag) + '\"/>' +\n        '<color argb=\"' + COLOR[key] + '\" value=\"' + COLOR[key] + '\"/>' +\n        '<remarks>' + esc(parts.join(\" | \")) + '</remarks>') });\n});\nconst flooding = (counts.major || 0) + (counts.moderate || 0) + (counts.minor || 0);\nnode.status({ fill: flooding ? \"red\" : (counts.action ? \"yellow\" : \"green\"), shape: \"dot\",\n    text: out.length + \" gauges: \" + flooding + \" flooding (\" + (counts.major || 0) + \" major/\" + (counts.moderate || 0) + \" mod/\" + (counts.minor || 0) + \" minor), \" + (counts.action || 0) + \" action\" });\nreturn [out];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 700,
+    "y": 120,
+    "wires": [
+      [
+        "0d228c6ab84ddc67"
+      ]
+    ]
+  },
+  {
+    "id": "0d228c6ab84ddc67",
+    "type": "tcp out",
+    "z": "8b8246272d20399b",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "158c3eb10cdc9096",
+    "x": 940,
+    "y": 280,
+    "wires": []
+  },
+  {
+    "id": "158c3eb10cdc9096",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

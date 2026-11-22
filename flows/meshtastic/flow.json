@@ -1,0 +1,258 @@
+[
+  {
+    "id": "7ce3c027cabc5132",
+    "type": "tab",
+    "label": "Meshtastic Nodes → TAK",
+    "disabled": false,
+    "info": "Meshtastic radios in Tennessee (plus a small buffer) that publish their position to the public Meshtastic MQTT server, shown with their node names. Only nodes whose owners turned on MQTT uplink or map reports appear, and only the default public LongFast channel is decoded.\n\nData: Meshtastic public MQTT server (https://meshtastic.org/docs/software/integrations/mqtt/). Updates every live (as nodes report; markers stay 60 minutes).\n\nNeeds: [node-red-contrib-meshtastic-advanced](https://flows.nodered.org/node/node-red-contrib-meshtastic-advanced) (Manage palette > Install).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Edit the Meshtastic public MQTT broker, open Security, and enter the public login meshdev / large4cats (the published login for mqtt.meshtastic.org).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/meshtastic",
+    "env": []
+  },
+  {
+    "id": "setup27cabc5132",
+    "type": "comment",
+    "z": "7ce3c027cabc5132",
+    "name": "SETUP - read me (double-click)",
+    "info": "Meshtastic radios in Tennessee (plus a small buffer) that publish their position to the public Meshtastic MQTT server, shown with their node names. Only nodes whose owners turned on MQTT uplink or map reports appear, and only the default public LongFast channel is decoded.\n\nData: Meshtastic public MQTT server (https://meshtastic.org/docs/software/integrations/mqtt/). Updates every live (as nodes report; markers stay 60 minutes).\n\nNeeds: [node-red-contrib-meshtastic-advanced](https://flows.nodered.org/node/node-red-contrib-meshtastic-advanced) (Manage palette > Install).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Edit the Meshtastic public MQTT broker, open Security, and enter the public login meshdev / large4cats (the published login for mqtt.meshtastic.org).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/meshtastic",
+    "x": 190,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "332eec10235dc264",
+    "type": "meshtastic-decode",
+    "z": "7ce3c027cabc5132",
+    "name": "",
+    "includeRaw": false,
+    "outputFormat": "nested",
+    "x": 690,
+    "y": 140,
+    "wires": [
+      [
+        "fd072b1cc83aee65",
+        "6eccd6bdc5389246"
+      ]
+    ]
+  },
+  {
+    "id": "ed6ac7856cc203ef",
+    "type": "meshtastic-decrypt",
+    "z": "7ce3c027cabc5132",
+    "name": "",
+    "mode": "auto",
+    "keyFormat": "base64",
+    "outputFormat": "object",
+    "x": 410,
+    "y": 140,
+    "wires": [
+      [
+        "b0ffe65218592196"
+      ]
+    ]
+  },
+  {
+    "id": "d0010219019cdf45",
+    "type": "mqtt in",
+    "z": "7ce3c027cabc5132",
+    "name": "US map reports",
+    "topic": "msh/US/2/map/#",
+    "qos": "2",
+    "datatype": "buffer",
+    "broker": "40bccd0c16943909",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 140,
+    "wires": [
+      [
+        "4668a3914271b1f9"
+      ]
+    ]
+  },
+  {
+    "id": "fd072b1cc83aee65",
+    "type": "function",
+    "z": "7ce3c027cabc5132",
+    "name": "Build COT",
+    "func": "// ---- config -----------------------------------------------------------\nvar cotType = \"a-n-G-E-S-E\"; // Ground/Equipment/Sensor/Emplaced Sensor -- distinct\n                              // equipment-frame icon (not the unit-square) for a\n                              // fixed radio node reporting position\n// Same Tennessee + buffer bounding box used in the Marinesia AIS and\n// Winlink VHF/UHF flows, for consistency.\nvar TN_BBOX = { latMin: 34.7, latMax: 37.0, lonMin: -90.6, lonMax: -81.3 };\nvar staleMinutes = 60; // Meshtastic nodes report position infrequently\n// -------------------------------------------------------------------------\n\nfunction esc(s) {\n    return String(s == null ? \"\" : s)\n        .replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\");\n}\n\n// meshtastic-decode's \"nested\" output shape is:\n//   msg.payload = { message: {$typeName, latitudeI, ...}, metadata: {from, portNum, ...}, envelope: {channelId, gatewayId}, radio: {...}, flags: {...} }\n//   msg._meshtastic = { encrypted, from, to, channel, packetId }\n// $typeName lives on payload.message, NOT on payload itself.\nvar payload = msg.payload;\nif (!payload || !payload.message) { return null; }\nvar meta = payload.metadata || {};\nvar envelope = payload.envelope || {};\nvar p = payload.message;\n\n// Only handle Position reports and MapReports -- both carry lat/lon and are\n// the two message types that actually make it through the public server's\n// filtering with usable location data. Other portnums (NODEINFO, TELEMETRY,\n// TEXT_MESSAGE, ROUTING/ACK, etc.) also flow through this same decode node\n// and are expected to be dropped here.\nvar isPosition = meta.portNum === \"POSITION_APP\" || p.$typeName === \"meshtastic.Position\";\nvar isMapReport = meta.portNum === \"MAP_REPORT_APP\" || p.$typeName === \"meshtastic.MapReport\";\nif (!isPosition && !isMapReport) { return null; }\nif (p.latitudeI === undefined || p.longitudeI === undefined) { return null; }\n\nvar lat = p.latitudeI * 1e-7;\nvar lon = p.longitudeI * 1e-7;\n\n// Learn node locations for the \"TN gateways only\" filter upstream.\n// Gateways report their own position (map reports / position packets), so\n// this builds a lookup of which uplinking nodes sit in or near Tennessee.\n(function () {\n    var num = meta.from !== undefined ? meta.from : (msg._meshtastic && msg._meshtastic.from);\n    if (num === undefined || num === null) return;\n    var key = (Number(num) >>> 0).toString(16);\n    var M = 0.5; // extra margin (deg) so border gateways that hear TN nodes are kept\n    var inTN = lat >= TN_BBOX.latMin - M && lat <= TN_BBOX.latMax + M &&\n               lon >= TN_BBOX.lonMin - M && lon <= TN_BBOX.lonMax + M;\n    var gw = flow.get(\"meshGatewayTN\") || {};\n    var changed = false;\n    // The sender's own location is authoritative for the sender\n    if (gw[key] !== inTN) { gw[key] = inTN; changed = true; }\n    // The uplinking gateway heard this sender over RF, so it is near it.\n    // A TN sighting marks the gateway TN; an out-of-state one only marks it\n    // out if it has not already been seen relaying TN traffic.\n    if (envelope.gatewayId) {\n        var g = parseInt(String(envelope.gatewayId).replace(/^!/, \"\"), 16);\n        if (!isNaN(g)) {\n            var gk = (g >>> 0).toString(16);\n            if (inTN && gw[gk] !== true) { gw[gk] = true; changed = true; }\n            else if (!inTN && gw[gk] === undefined) { gw[gk] = false; changed = true; }\n        }\n    }\n    if (changed) { flow.set(\"meshGatewayTN\", gw); }\n})();\n\n// Drop anything outside the TN + buffer box.\nif (lat < TN_BBOX.latMin || lat > TN_BBOX.latMax ||\n    lon < TN_BBOX.lonMin || lon > TN_BBOX.lonMax) {\n    return null;\n}\n\n// metadata.from (fallback: msg._meshtastic.from) is the actual packet SENDER's\n// node number. envelope.gatewayId is the separate uplinking gateway node --\n// deliberately not used here, since it would mislabel every peer a gateway\n// relays with the gateway's own identity instead of the real sender.\nvar fromNum = meta.from !== undefined ? meta.from : (msg._meshtastic && msg._meshtastic.from);\nvar nodeId;\nif (fromNum !== undefined && fromNum !== null) {\n    nodeId = \"!\" + (Number(fromNum) >>> 0).toString(16);\n} else {\n    nodeId = \"unknown\";\n    node.warn(\"Build COT: no metadata.from / _meshtastic.from found on msg -- node ID will be 'unknown'. Check meshtastic-decode's output shape.\");\n}\n\n// Look up a real name cached from NODEINFO_APP messages (see the other\n// function node) -- MapReport already carries the node's name directly in\n// the same packet, so prefer that when present; otherwise fall back to the\n// NodeInfo cache, then the raw node ID.\nvar names = flow.get('meshtastic_names') || {};\nvar nameInfo = names[nodeId];\nvar callsign = p.longName || (nameInfo && nameInfo.longName) || nodeId;\nvar shortName = p.shortName || (nameInfo && nameInfo.shortName);\n\nvar now = new Date();\nvar start = now.toISOString();\nvar stale = new Date(now.getTime() + staleMinutes * 60 * 1000).toISOString();\n\nvar uid = \"meshtastic-\" + nodeId.replace(/[^A-Za-z0-9]/g, \"_\");\n\nvar remarksParts = [\"Meshtastic node \" + nodeId, isMapReport ? \"Source: Map Report\" : \"Source: Position\"];\nif (shortName) { remarksParts.push(\"Short: \" + shortName); }\nif (envelope.channelId) { remarksParts.push(\"Channel: \" + envelope.channelId); }\nif (envelope.gatewayId) { remarksParts.push(\"Via gateway: \" + envelope.gatewayId); }\nif (p.altitude) { remarksParts.push(\"Alt: \" + p.altitude + \"m\"); }\nif (p.satsInView) { remarksParts.push(\"Sats: \" + p.satsInView); }\nvar precision = p.precisionBits !== undefined ? p.precisionBits : p.positionPrecision;\nif (precision) { remarksParts.push(\"Precision bits: \" + precision + \" (public server limits precision)\"); }\n\n// ground_track is degrees * 1e5 in the Meshtastic Position protobuf (same\n// scaling idea as latitudeI/longitudeI); ground_speed is already m/s.\nvar course = (p.groundTrack || 0) / 1e5;\nvar speed = p.groundSpeed || 0;\n\nvar cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n    '<event version=\"2.0\" uid=\"' + uid + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n    'time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' +\n    '<point lat=\"' + lat.toFixed(6) + '\" lon=\"' + lon.toFixed(6) + '\" hae=\"' + (p.altitude || 0) + '\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n    '<detail>' +\n    '<contact callsign=\"' + esc(callsign) + '\"/>' +\n    '<track course=\"' + course + '\" speed=\"' + speed + '\"/>' +\n    '<remarks>' + esc(remarksParts.join(\" | \")) + '</remarks>' +\n    '</detail>' +\n    '</event>';\n\nmsg.payload = cot;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 810,
+    "y": 200,
+    "wires": [
+      [
+        "76c4f37b5ceadc23"
+      ]
+    ]
+  },
+  {
+    "id": "6eccd6bdc5389246",
+    "type": "function",
+    "z": "7ce3c027cabc5132",
+    "name": "mestastic name decode ",
+    "func": "// Cache Meshtastic node names (NODEINFO_APP / meshtastic.User) so Position\n// CoTs can show a real callsign instead of the raw node ID.\n// Same nested shape as Build COT: $typeName is on payload.message, and the\n// sender's node number is metadata.from -- keyed to match the nodeId format\n// Build COT computes (\"!\" + hex(from)), not the raw payload.message.id field,\n// so name lookups actually hit.\nvar payload = msg.payload;\nif (!payload || !payload.message) { return null; }\nvar meta = payload.metadata || {};\nvar p = payload.message;\nif (meta.portNum !== \"NODEINFO_APP\" && p.$typeName !== \"meshtastic.User\") { return null; }\n\nvar fromNum = meta.from !== undefined ? meta.from : (msg._meshtastic && msg._meshtastic.from);\nif (fromNum === undefined || fromNum === null) { return null; }\nvar nodeId = \"!\" + (Number(fromNum) >>> 0).toString(16);\n\nvar names = flow.get('meshtastic_names') || {};\nnames[nodeId] = { longName: p.longName || '', shortName: p.shortName || '' };\nflow.set('meshtastic_names', names);\n\nnode.status({ fill: 'blue', shape: 'dot', text: Object.keys(names).length + ' node names cached' });\nreturn null; // this node only updates the cache, nothing to send downstream",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 670,
+    "y": 300,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "76c4f37b5ceadc23",
+    "type": "tcp out",
+    "z": "7ce3c027cabc5132",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "a822460afc919f48",
+    "x": 1060,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "4668a3914271b1f9",
+    "type": "switch",
+    "z": "7ce3c027cabc5132",
+    "name": "Envelopes + map reports",
+    "property": "topic",
+    "propertyType": "msg",
+    "rules": [
+      {
+        "t": "regex",
+        "v": "/2/(e|map)/",
+        "vt": "str",
+        "case": false
+      }
+    ],
+    "checkall": "true",
+    "repair": false,
+    "outputs": 1,
+    "x": 430,
+    "y": 200,
+    "wires": [
+      [
+        "9265ffce35b653f8"
+      ]
+    ]
+  },
+  {
+    "id": "3aac6c81bd35ca26",
+    "type": "mqtt in",
+    "z": "7ce3c027cabc5132",
+    "name": "US LongFast (default key)",
+    "topic": "msh/US/2/e/LongFast/#",
+    "qos": "2",
+    "datatype": "buffer",
+    "broker": "40bccd0c16943909",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 200,
+    "wires": [
+      [
+        "4668a3914271b1f9"
+      ]
+    ]
+  },
+  {
+    "id": "9265ffce35b653f8",
+    "type": "function",
+    "z": "7ce3c027cabc5132",
+    "name": "TN gateways only",
+    "func": "// TN gateway filter -- runs BEFORE decrypt/decode to save CPU.\n// LongFast topics end in the uplinking gateway ID (msh/US/2/e/LongFast/!a1b2c3d4).\n// Build COT records which nodes are in/near TN (flow \"meshGatewayTN\").\n//  - map reports: always pass (low volume; they teach gateway locations)\n//  - known TN gateway: pass\n//  - known out-of-state gateway: drop\n//  - unknown gateway: pass 1 in UNKNOWN_SAMPLE so its location can be learned\nvar UNKNOWN_SAMPLE = 25;\nvar t = msg.topic || \"\";\nvar c = context.get(\"c\") || { tn: 0, out: 0, unk: 0, map: 0, n: 0 };\nc.n++;\nvar pass = false;\nif (t.indexOf(\"/2/map/\") !== -1) { c.map++; pass = true; }\nelse {\n    var gwNum = parseInt(t.split(\"/\").pop().replace(/^!/, \"\"), 16);\n    var gw = flow.get(\"meshGatewayTN\") || {};\n    var v = isNaN(gwNum) ? undefined : gw[(gwNum >>> 0).toString(16)];\n    if (v === true) { c.tn++; pass = true; }\n    else if (v === false) { c.out++; }\n    else { c.unk++; pass = (c.unk % UNKNOWN_SAMPLE === 0); }\n}\ncontext.set(\"c\", c);\nif (c.n % 500 === 0) {\n    node.status({ fill: \"green\", shape: \"dot\", text: \"TN \" + c.tn + \" | out \" + c.out + \" | unknown \" + c.unk + \" | map \" + c.map });\n}\nreturn pass ? msg : null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 420,
+    "y": 240,
+    "wires": [
+      [
+        "ed6ac7856cc203ef"
+      ]
+    ]
+  },
+  {
+    "id": "b0ffe65218592196",
+    "type": "function",
+    "z": "7ce3c027cabc5132",
+    "name": "Drop packets with no payload",
+    "func": "// Drops packets that have no readable payload (not encrypted AND not decoded),\n// which otherwise make meshtastic-decode throw ~8 errors/sec. Counts what it drops.\nconst pkt = msg.payload && msg.payload.packet;\nconst kind = /\\/2\\/map\\//.test(msg.topic || \"\") ? \"map\" : \"LongFast\";\nif (pkt && pkt.payloadVariant && pkt.payloadVariant.case === \"decoded\") {\n    context.set(\"pass\", (context.get(\"pass\") || 0) + 1);\n    return msg;\n}\nconst c = context.get(\"drop\") || { map: 0, LongFast: 0 };\nc[kind]++; context.set(\"drop\", c);\nnode.status({ fill: \"grey\", shape: \"dot\", text: \"passed \" + (context.get(\"pass\") || 0) + \" | dropped empty: LongFast \" + c.LongFast + \", map \" + c.map });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 550,
+    "y": 200,
+    "wires": [
+      [
+        "332eec10235dc264"
+      ]
+    ]
+  },
+  {
+    "id": "40bccd0c16943909",
+    "type": "mqtt-broker",
+    "name": "Meshtastic public MQTT",
+    "broker": "mqtt.meshtastic.org",
+    "port": 1883,
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": 4,
+    "keepalive": 60,
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthRetain": "false",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closeRetain": "false",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willRetain": "false",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  },
+  {
+    "id": "a822460afc919f48",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

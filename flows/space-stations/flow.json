@@ -1,0 +1,514 @@
+[
+  {
+    "id": "b58a49c7d70586fd",
+    "type": "tab",
+    "label": "Space Stations → TAK",
+    "disabled": false,
+    "info": "Live positions of crewed space stations (ISS, Tiangong) and related objects.\n\nData: Space-Track.org and SatNOGS DB (https://www.space-track.org/). Updates every 30 seconds (orbits refreshed every 6 hours).\n\nNeeds: A free [Space-Track.org](https://www.space-track.org/auth/createAccount) account; The satellite.js module (see *Satellite and GOES flows* in the main README).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set SPACETRACK_USER and SPACETRACK_PASS in the tab's Environment Variables (keep the password type as *credential*).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/space-stations",
+    "env": [
+      {
+        "name": "SPACETRACK_USER",
+        "value": "",
+        "type": "str"
+      },
+      {
+        "name": "SPACETRACK_PASS",
+        "type": "cred"
+      }
+    ]
+  },
+  {
+    "id": "setupc7d70586fd",
+    "type": "comment",
+    "z": "b58a49c7d70586fd",
+    "name": "SETUP - read me (double-click)",
+    "info": "Live positions of crewed space stations (ISS, Tiangong) and related objects.\n\nData: Space-Track.org and SatNOGS DB (https://www.space-track.org/). Updates every 30 seconds (orbits refreshed every 6 hours).\n\nNeeds: A free [Space-Track.org](https://www.space-track.org/auth/createAccount) account; The satellite.js module (see *Satellite and GOES flows* in the main README).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set SPACETRACK_USER and SPACETRACK_PASS in the tab's Environment Variables (keep the password type as *credential*).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/space-stations",
+    "x": 220,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "915c507961c0738d",
+    "type": "inject",
+    "z": "b58a49c7d70586fd",
+    "name": "Refresh from Space-Track (every 6h + on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "21600",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "20",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 310,
+    "y": 40,
+    "wires": [
+      [
+        "1ac1d5636a4b8b18",
+        "ssradio_build"
+      ]
+    ]
+  },
+  {
+    "id": "1ac1d5636a4b8b18",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Circuit Gate (ss)",
+    "func": "var sourceName = 'spacetrack-ss';\nvar cooldownMinutes = 60;\nvar key = 'circuitBreaker_' + sourceName;\nvar state = flow.get(key) || { open: false, failCount: 0, openedAt: 0 };\nif (state.open) {\n    var elapsedMin = (Date.now() - state.openedAt) / 60000;\n    if (elapsedMin < cooldownMinutes) {\n        node.status({ fill: 'red', shape: 'ring', text: sourceName + ': OPEN (' + Math.round(cooldownMinutes - elapsedMin) + 'm left)' });\n        return null;\n    }\n    node.status({ fill: 'yellow', shape: 'dot', text: sourceName + ': testing recovery' });\n}\nmsg._circuitBreakerSource = sourceName;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 180,
+    "y": 120,
+    "wires": [
+      [
+        "33f42c35b8c7b7fb"
+      ]
+    ]
+  },
+  {
+    "id": "fd28b3270b42f5cc",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Build Space-Track query",
+    "func": "var NORAD_IDS = [25544, 36086, 48274, 49044, 53239, 54216];\n// Added 2026-08-30 after checking against Celestrak's live 'stations' group:\n// 36086 = POISK, 49044 = NAUKA -- both separate-catalog Russian ISS modules\n// that were missing from the original 4-object list.\n\nif (!NORAD_IDS.length) {\n    node.status({ fill: 'red', shape: 'ring', text: 'NORAD_IDS list is empty -- see tab info' });\n    return null;\n}\n\nvar cookie = flow.get('spacetrack_session_cookie');\nif (!cookie) {\n    node.status({ fill: 'red', shape: 'ring', text: 'no session cookie -- login step failed upstream' });\n    return null;\n}\n\nvar queryUrl = 'https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/' +\n    NORAD_IDS.join(',') + '/orderby/NORAD_CAT_ID/format/json';\n\nmsg.url = queryUrl;\nmsg.method = 'GET';\nmsg.headers = { Cookie: cookie };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1210,
+    "y": 120,
+    "wires": [
+      [
+        "be5048e8cf4c1243"
+      ]
+    ]
+  },
+  {
+    "id": "be5048e8cf4c1243",
+    "type": "http request",
+    "z": "b58a49c7d70586fd",
+    "name": "GET Space-Track query (session cookie)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 240,
+    "y": 240,
+    "wires": [
+      [
+        "c47e31ae91e04dd1"
+      ]
+    ]
+  },
+  {
+    "id": "c47e31ae91e04dd1",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Check Response",
+    "func": "var ERROR_CODES = [301, 400, 401, 403, 404, 429, 500, 502, 503, 504];\nvar TRIP_THRESHOLD = 1;\nvar sourceName = msg._circuitBreakerSource || node.id;\nvar key = 'circuitBreaker_' + sourceName;\nvar state = flow.get(key) || { open: false, failCount: 0, openedAt: 0 };\nvar code = msg.statusCode;\nvar bodyLooksLikeError = typeof msg.payload === 'string' && /error|invalid|denied/i.test(msg.payload.slice(0, 300));\nvar isError = ERROR_CODES.indexOf(code) !== -1 || bodyLooksLikeError;\nif (isError) {\n    state.failCount = (state.failCount || 0) + 1;\n    if (state.failCount >= TRIP_THRESHOLD) {\n        state.open = true; state.openedAt = Date.now();\n        state.lastError = { code: code, at: new Date().toISOString() };\n        flow.set(key, state);\n        node.error('CIRCUIT BREAKER TRIPPED: ' + sourceName + ' returned HTTP ' + code, msg);\n        node.status({ fill: 'red', shape: 'dot', text: sourceName + ': TRIPPED (HTTP ' + code + ')' });\n        return [null, { payload: { sourceName: sourceName, statusCode: code, failCount: state.failCount, timestamp: new Date().toISOString() } }];\n    }\n    flow.set(key, state);\n    node.warn(sourceName + ': error ' + code);\n    return [null, null];\n}\nif (state.failCount > 0 || state.open) { node.status({ fill: 'green', shape: 'dot', text: sourceName + ': recovered' }); }\nflow.set(key, { open: false, failCount: 0, openedAt: 0 });\nreturn [msg, null];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 530,
+    "y": 240,
+    "wires": [
+      [
+        "dc75b2bea619a9e0"
+      ],
+      [
+        "3324f3d733bf241e"
+      ]
+    ]
+  },
+  {
+    "id": "dc75b2bea619a9e0",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Parse GP response + cache",
+    "func": "var arr = Array.isArray(msg.payload) ? msg.payload : [];\nvar sats = [];\narr.forEach(function (o) {\n    if (o && o.TLE_LINE1 && o.TLE_LINE2) {\n        sats.push({ name: o.OBJECT_NAME || ('NORAD ' + o.NORAD_CAT_ID), line1: o.TLE_LINE1, line2: o.TLE_LINE2, noradId: String(o.NORAD_CAT_ID), country: o.COUNTRY_CODE || 'UNKNOWN' });\n    }\n});\nflow.set('ss_sats', sats);\nnode.status({ fill: 'blue', shape: 'dot', text: sats.length + ' objects cached' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 800,
+    "y": 220,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "3324f3d733bf241e",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Build Alert CoT",
+    "func": "var channelName = 'SystemAlerts'; var markerLat = 36.1627; var markerLon = -86.7816; var staleMinutes = 60;\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\nvar a = msg.payload;\nvar now = new Date(); var start = now.toISOString();\nvar stale = new Date(now.getTime() + staleMinutes * 60000).toISOString();\nvar uid = 'circuit-alert-' + a.sourceName;\nvar remarks = 'CIRCUIT BREAKER TRIPPED | Source: ' + a.sourceName + ' | HTTP ' + a.statusCode + ' | Failures: ' + a.failCount;\nvar cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' + '<event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"b-m-p-s-m\" how=\"m-g\" time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' + '<point lat=\"' + markerLat + '\" lon=\"' + markerLon + '\" hae=\"0\" ce=\"9999999.0\" le=\"9999999.0\"/>' + '<detail><contact callsign=\"ALERT: ' + esc(a.sourceName) + '\"/><color value=\"-65536\"/>' + '<remarks>' + esc(remarks) + '</remarks></detail></event>';\nmsg.payload = cot;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 770,
+    "y": 300,
+    "wires": [
+      [
+        "2c7e9089ed96961b"
+      ]
+    ]
+  },
+  {
+    "id": "33f42c35b8c7b7fb",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Build Login Request",
+    "func": "var user = env.get('SPACETRACK_USER');\nvar pass = env.get('SPACETRACK_PASS');\nif (!user || !pass) {\n    node.status({ fill: 'red', shape: 'ring', text: 'Set SPACETRACK_USER/PASS in tab env vars' });\n    return null;\n}\nmsg.payload = 'identity=' + encodeURIComponent(user) + '&password=' + encodeURIComponent(pass);\nmsg.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 120,
+    "wires": [
+      [
+        "acacf5ce60af95d4"
+      ]
+    ]
+  },
+  {
+    "id": "acacf5ce60af95d4",
+    "type": "http request",
+    "z": "b58a49c7d70586fd",
+    "name": "POST Login to Space-Track",
+    "method": "POST",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://www.space-track.org/ajaxauth/login",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 680,
+    "y": 120,
+    "wires": [
+      [
+        "9ada7959866c0f77"
+      ]
+    ]
+  },
+  {
+    "id": "9ada7959866c0f77",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Extract Session Cookie",
+    "func": "var setCookie = msg.headers && msg.headers['set-cookie'];\nif (!setCookie || !setCookie.length) {\n    node.status({ fill: 'red', shape: 'ring', text: 'login failed -- no Set-Cookie received' });\n    node.error('Space-Track login: no Set-Cookie header in response', msg);\n    return null;\n}\nvar cookieHeader = setCookie.map(function (c) { return c.split(';')[0]; }).join('; ');\nflow.set('spacetrack_session_cookie', cookieHeader);\nnode.status({ fill: 'green', shape: 'dot', text: 'session cookie captured' });\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 950,
+    "y": 120,
+    "wires": [
+      [
+        "fd28b3270b42f5cc"
+      ]
+    ]
+  },
+  {
+    "id": "46e37210397f900b",
+    "type": "inject",
+    "z": "b58a49c7d70586fd",
+    "name": "Propagate + emit (every 30s)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "30",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "25",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 230,
+    "y": 520,
+    "wires": [
+      [
+        "fcfe694f93f806f0"
+      ]
+    ]
+  },
+  {
+    "id": "fcfe694f93f806f0",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Propagate (SGP4) + build CoT",
+    "func": "var staleSeconds = 120;\nvar FRIENDLY = ['US','UK','FR','GERMANY','GER','IT','CANADA','CA','SPAIN','NETH','NETHERLANDS','BEL','NORWAY','DEN','POLAND','TURK','PORTUGAL','GREECE','CZCH','ROMANIA','HUNGARY','SVK','HRV','JPN','JAPAN','AUS','AUSTRALIA','ROK','SKOR','SKOREA','NZ','ESA','EUME','ISRA','MEX','RP','JOR','THAI','SAUD','SWTZ','IND','ARGN','INDO','MALA','BRAZ','SAFR','ISS','AB'];\nvar HOSTILE = ['CIS','RUSSIA','SU','PRC','CHN','CHINA','PRK','NKOR','NORTH KOREA','CUBA','VTNM','VIETNAM','LAOS'];\n\nvar FORCE_FRIENDLY_IDS = ['25544', '36086', '49044']; // ISS ZARYA, POISK, NAUKA\n\nvar OFFSET_DEG = 0.015;\nvar POSITION_OFFSETS = {\n    '36086': { dLat:  OFFSET_DEG, dLon:  OFFSET_DEG },\n    '49044': { dLat: -OFFSET_DEG, dLon: -OFFSET_DEG },\n    '53239': { dLat:  OFFSET_DEG, dLon:  OFFSET_DEG },\n    '54216': { dLat: -OFFSET_DEG, dLon: -OFFSET_DEG }\n};\n\nvar sats = flow.get('ss_sats') || [];\nif (!sats.length) { node.status({ fill: 'grey', shape: 'ring', text: 'waiting for first Space-Track refresh' }); return null; }\nvar now = new Date();\nvar startIso = now.toISOString();\nvar staleIso = new Date(now.getTime() + staleSeconds * 1000).toISOString();\nvar gmst = satellite.gstime(now);\nvar msgs = []; var errors = 0; var staleTle = 0;\n// Skip satellites whose element set is older than this: they are dead / re-entered\n// (Space-Track stops updating them) and propagate to wrong positions or fail.\nvar MAX_TLE_AGE_DAYS = 30;\nsats.forEach(function (s) {\n    try {\n        var satrec = satellite.twoline2satrec(s.line1, s.line2);\n        var epochMs = (satrec.jdsatepoch + (satrec.jdsatepochF || 0) - 2440587.5) * 86400000;\n        if (!isFinite(epochMs) || (now.getTime() - epochMs) > MAX_TLE_AGE_DAYS * 86400000) { staleTle++; return; }\n        var pv = satellite.propagate(satrec, now);\n        if (!pv || !pv.position) { errors++; return; }\n        var geo = satellite.eciToGeodetic(pv.position, gmst);\n        var lat = satellite.degreesLat(geo.latitude);\n        var lon = satellite.degreesLong(geo.longitude);\n        var altKm = geo.height;\n\n        var offset = POSITION_OFFSETS[s.noradId];\n        var isOffset = !!offset;\n        if (offset) { lat += offset.dLat; lon += offset.dLon; }\n        var cc = (s.country || 'UNKNOWN').toUpperCase();\n        var aff = 'u';\n        if (FORCE_FRIENDLY_IDS.indexOf(s.noradId) !== -1) { aff = 'f'; }\n        else if (FRIENDLY.indexOf(cc) !== -1) { aff = 'f'; } else if (HOSTILE.indexOf(cc) !== -1) { aff = 'h'; }\n        var funcLetter = 'T'; var cotExt = '';\n        var affLetter = (aff === 'f') ? 'F' : (aff === 'h') ? 'H' : 'U';\n        var cotType = 'a-' + aff + '-P-' + funcLetter + cotExt;\n        var sidc = 'S' + affLetter + 'P*' + funcLetter + '-----*****';\n        var uid = 'sat-' + s.noradId;\n        var radio = (flow.get('ss_radio') || {})[s.noradId];\n        var remarks = 'NORAD ' + s.noradId + ' | Owner: ' + cc + ' | Alt: ' + altKm.toFixed(1) + ' km | Name: ' + s.name +\n            (radio ? ' | Radio: ' + radio : '') +\n            (isOffset ? ' | NOTE: position offset ~1.5km for map legibility -- module is physically docked/co-located with its station, not independently tracked' : '');\n        var cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' + '<event version=\"2.0\" uid=\"' + uid + '\" type=\"' + cotType + '\" how=\"m-g\" time=\"' + startIso + '\" start=\"' + startIso + '\" stale=\"' + staleIso + '\">' + '<point lat=\"' + lat.toFixed(6) + '\" lon=\"' + lon.toFixed(6) + '\" hae=\"' + (altKm * 1000).toFixed(0) + '\" ce=\"9999999.0\" le=\"9999999.0\"/>' + '<detail>' + '<contact callsign=\"' + s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '\"/>' + '<remarks>' + remarks.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</remarks>' + '<milsym id=\"' + sidc + '\"/>' + '<milicon id=\"' + sidc + '\"/>' + '</detail>' + '</event>';\n        msgs.push({ payload: cot });\n    } catch (e) { errors++; }\n});\nnode.status({ fill: 'green', shape: 'dot', text: msgs.length + ' sats emitted' + (staleTle ? (', ' + staleTle + ' skipped (TLE > ' + MAX_TLE_AGE_DAYS + 'd old)') : '') + (errors ? (', ' + errors + ' errors') : '') });\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [
+      {
+        "var": "satellite",
+        "module": "satellite.js"
+      }
+    ],
+    "x": 570,
+    "y": 520,
+    "wires": [
+      [
+        "1108e0d59fce977a",
+        "e1427e0a42f66850"
+      ]
+    ]
+  },
+  {
+    "id": "1108e0d59fce977a",
+    "type": "debug",
+    "z": "b58a49c7d70586fd",
+    "name": "CoT out (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 880,
+    "y": 560,
+    "wires": []
+  },
+  {
+    "id": "d5b74bd61bb42e49",
+    "type": "inject",
+    "z": "b58a49c7d70586fd",
+    "name": "MANUAL RESET (click to clear breaker)",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "spacetrack-ss",
+    "payload": "",
+    "payloadType": "date",
+    "x": 250,
+    "y": 400,
+    "wires": [
+      [
+        "19f33c24e39d275a"
+      ]
+    ]
+  },
+  {
+    "id": "19f33c24e39d275a",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Clear breaker",
+    "func": "var sourceName = msg.topic;\nif (!sourceName) { node.warn('Set the inject node topic to the sourceName to reset'); return null; }\nflow.set('circuitBreaker_' + sourceName, { open: false, failCount: 0, openedAt: 0 });\nnode.warn('Circuit breaker manually cleared for: ' + sourceName);\nnode.status({ fill: 'green', shape: 'dot', text: sourceName + ': manually cleared' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 400,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "aceaaec8d8c3adb6",
+    "type": "http in",
+    "z": "b58a49c7d70586fd",
+    "name": "GET /debug/ss-cache",
+    "url": "/debug/ss-cache",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 330,
+    "y": 620,
+    "wires": [
+      [
+        "a4ed2f3c0f46948a"
+      ]
+    ]
+  },
+  {
+    "id": "a4ed2f3c0f46948a",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Build debug response",
+    "func": "var sats = flow.get('ss_sats') || [];\nmsg.payload = JSON.stringify({\n    count: sats.length,\n    objects: sats.map(function (s) {\n        return { name: s.name, noradId: s.noradId, country: s.country };\n    })\n}, null, 2);\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 590,
+    "y": 620,
+    "wires": [
+      [
+        "837dc76fd34e768b"
+      ]
+    ]
+  },
+  {
+    "id": "837dc76fd34e768b",
+    "type": "http response",
+    "z": "b58a49c7d70586fd",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 830,
+    "y": 620,
+    "wires": []
+  },
+  {
+    "id": "2c7e9089ed96961b",
+    "type": "tcp out",
+    "z": "b58a49c7d70586fd",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "b1f9c8c4073e5f46",
+    "x": 1010,
+    "y": 300,
+    "wires": []
+  },
+  {
+    "id": "e1427e0a42f66850",
+    "type": "tcp out",
+    "z": "b58a49c7d70586fd",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "b1f9c8c4073e5f46",
+    "x": 940,
+    "y": 480,
+    "wires": []
+  },
+  {
+    "id": "ssradio_build",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Build SatNOGS Radio Query",
+    "func": "var NORAD_IDS = [25544, 36086, 48274, 49044, 53239, 54216]; // same 6 objects as the Space-Track query\nvar msgs = NORAD_IDS.map(function (id) {\n    return {\n        url: 'https://db.satnogs.org/api/transmitters/?satellite__norad_cat_id=' + id + '&status=active&format=json',\n        method: 'GET',\n        noradId: String(id)\n    };\n});\nnode.status({ fill: 'blue', shape: 'dot', text: 'querying SatNOGS for ' + msgs.length + ' objects' });\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 340,
+    "y": 780,
+    "wires": [
+      [
+        "ssradio_http"
+      ]
+    ]
+  },
+  {
+    "id": "ssradio_http",
+    "type": "http request",
+    "z": "b58a49c7d70586fd",
+    "name": "GET SatNOGS transmitters",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 600,
+    "y": 780,
+    "wires": [
+      [
+        "ssradio_merge"
+      ]
+    ]
+  },
+  {
+    "id": "ssradio_merge",
+    "type": "function",
+    "z": "b58a49c7d70586fd",
+    "name": "Merge SatNOGS Radio Info",
+    "func": "var existing = flow.get('ss_radio') || {};\nvar arr = Array.isArray(msg.payload) ? msg.payload : [];\nif (arr.length) {\n    var t = arr[0];\n    var downlink = t.downlink_low ? (t.downlink_low / 1e6).toFixed(3) + ' MHz' : null;\n    var uplink = t.uplink_low ? (t.uplink_low / 1e6).toFixed(3) + ' MHz' : null;\n    var mode = t.mode || '';\n    var parts = [];\n    if (downlink) parts.push('RX/Downlink ' + downlink + (mode ? ' ' + mode : ''));\n    if (uplink) parts.push('TX/Uplink ' + uplink + (mode ? ' ' + mode : ''));\n    existing[msg.noradId] = parts.length ? parts.join(' | ') : null;\n} else {\n    existing[msg.noradId] = null;\n}\nflow.set('ss_radio', existing);\nnode.status({ fill: 'blue', shape: 'dot', text: Object.keys(existing).length + ' radio entries cached' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 870,
+    "y": 780,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "b1f9c8c4073e5f46",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

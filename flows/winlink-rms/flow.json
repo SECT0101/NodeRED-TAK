@@ -1,0 +1,263 @@
+[
+  {
+    "id": "winlink_tab",
+    "type": "tab",
+    "label": "Winlink RMS Gateways → TAK",
+    "disabled": false,
+    "info": "Public Winlink RMS gateways, HF (PACTOR) and VHF/UHF (packet), with callsign, grid square and frequencies.\n\nData: Winlink CMS public listings (https://winlink.org/RMSChannels). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/winlink-rms",
+    "env": []
+  },
+  {
+    "id": "setupinlink_tab",
+    "type": "comment",
+    "z": "winlink_tab",
+    "name": "SETUP - read me (double-click)",
+    "info": "Public Winlink RMS gateways, HF (PACTOR) and VHF/UHF (packet), with callsign, grid square and frequencies.\n\nData: Winlink CMS public listings (https://winlink.org/RMSChannels). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/winlink-rms",
+    "x": 240,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "n_inject",
+    "type": "inject",
+    "z": "winlink_tab",
+    "name": "Every 15 min (+ on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "900",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "3",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 200,
+    "y": 80,
+    "wires": [
+      [
+        "n_http"
+      ]
+    ]
+  },
+  {
+    "id": "n_http",
+    "type": "http request",
+    "z": "winlink_tab",
+    "name": "GET Winlink PUBLIC PACTOR listing",
+    "method": "GET",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "https://cms.winlink.org:444/listings/RmsPactorListing.aspx?serviceCodes=PUBLIC",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 450,
+    "y": 220,
+    "wires": [
+      [
+        "n_parse"
+      ]
+    ]
+  },
+  {
+    "id": "n_parse",
+    "type": "function",
+    "z": "winlink_tab",
+    "name": "Parse Winlink gateway list",
+    "func": "// Winlink's public RMS PACTOR listing is plain text, one block per gateway channel:\n//\n//   K9BBS-10.WINLINK, Jerome Kutche/K9BBS, [EM68SR: Mitchell, IN], (Fri, 06 Oct 2017 23:03:00 GMT)\n//   A Mitchell, IN\n//   - 14112.5 14112.5# 18109.5 18109.5# 28181.5 28181.5#\n//\n// This is not an officially documented/versioned API (same situation as most\n// Winlink tooling below the top-level web pages) -- if Winlink ever changes\n// the listing text layout, only this regex needs updating.\n\nvar text = msg.payload || \"\";\nvar lines = text.split(/\\r?\\n/);\n\n// Optional region filter: only keep gateways whose grid starts with one of\n// these two-letter Maidenhead field prefixes. Leave the array empty to keep\n// every station worldwide (the full PUBLIC list can be 100+ gateways).\n// Example: [\"EM\", \"FM\"] keeps most of the southeastern/central US.\nvar gridPrefixFilter = [];\n\nvar headerRe = /^(\\S+)\\.WINLINK,\\s*(.+?)\\/(\\S+),\\s*\\[([A-Za-z0-9]{4,6}):\\s*([^\\]]*)\\],\\s*\\(([^)]+)\\)\\s*$/;\n\nvar stations = [];\nvar current = null;\n\nfor (var i = 0; i < lines.length; i++) {\n    var line = lines[i].trim();\n    var m = headerRe.exec(line);\n    if (m) {\n        if (current) { stations.push(current); }\n        current = {\n            channel: m[1],\n            sysop: m[2].trim(),\n            callsign: m[3].trim(),\n            grid: m[4].toUpperCase(),\n            location: m[5].trim(),\n            lastUpdate: m[6].trim(),\n            freqs: []\n        };\n        continue;\n    }\n    if (current) {\n        if (line.indexOf(\"-\") === 0) {\n            var freqPart = line.replace(/^-\\s*/, \"\");\n            var freqTokens = freqPart.split(/\\s+/).filter(Boolean);\n            current.freqs = current.freqs.concat(freqTokens);\n        } else if (line.indexOf(\"E \") === 0) {\n            current.email = line.substring(2).trim();\n        } else if (line.indexOf(\"H \") === 0) {\n            current.homepage = line.substring(2).trim();\n        }\n        // \"A \" (address) lines are ignored -- duplicates the [Grid: ...] text\n    }\n}\nif (current) { stations.push(current); }\n\nif (gridPrefixFilter.length) {\n    stations = stations.filter(function (s) {\n        return gridPrefixFilter.indexOf(s.grid.substring(0, 2)) !== -1;\n    });\n}\n\nnode.status({ fill: \"blue\", shape: \"dot\", text: stations.length + \" gateways parsed\" });\n\nvar msgs = stations.map(function (s) {\n    return { station: s };\n});\n\nreturn [msgs];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 850,
+    "y": 220,
+    "wires": [
+      [
+        "n_cot"
+      ]
+    ]
+  },
+  {
+    "id": "n_cot",
+    "type": "function",
+    "z": "winlink_tab",
+    "name": "Build CoT (2525 Signal / network node)",
+    "func": "// ---- config -----------------------------------------------------------\n// CoT type: friendly / Ground / Unit / Combat Support / Signal.\n// This is the standard MIL-STD-2525 \"Signal\" (communications/network node)\n// ground unit function. If your TAK client renders it differently than\n// expected, this is the one line to change.\nvar cotType = \"a-f-G-U-U-S\";\n\n// how long a marker stays on the map between polls before TAK greys it out\nvar staleHours = 20 / 60;\n// -------------------------------------------------------------------------\n\nfunction maidenheadToLatLon(loc) {\n    loc = (loc || \"\").toUpperCase();\n    if (loc.length < 4) { return null; }\n    var A = \"ABCDEFGHIJKLMNOPQR\";\n    var lon = (A.indexOf(loc[0]) * 20) - 180;\n    var lat = (A.indexOf(loc[1]) * 10) - 90;\n    lon += parseInt(loc[2], 10) * 2;\n    lat += parseInt(loc[3], 10) * 1;\n    if (loc.length >= 6) {\n        lon += A.indexOf(loc[4]) * (2 / 24);\n        lat += A.indexOf(loc[5]) * (1 / 24);\n        lon += (2 / 24) / 2;\n        lat += (1 / 24) / 2;\n    } else {\n        // center of the 4-character (locator) square\n        lon += 1;\n        lat += 0.5;\n    }\n    return { lat: lat, lon: lon };\n}\n\nfunction xmlEscape(s) {\n    return (s || \"\").toString()\n        .replace(/&/g, \"&amp;\")\n        .replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\")\n        .replace(/\"/g, \"&quot;\");\n}\n\nvar s = msg.station;\nif (!s || !s.grid) { return null; }\n\nvar pos = maidenheadToLatLon(s.grid);\nif (!pos) { return null; }\n\nvar now = new Date();\nvar start = now.toISOString();\nvar stale = new Date(now.getTime() + staleHours * 60 * 60 * 1000).toISOString();\n\n// each Winlink \"channel\" (e.g. K9BBS-10) is a distinct network node --\n// one sysop callsign can run several channels on different frequencies/grids\nvar uid = \"winlink-\" + s.channel.replace(/[^A-Za-z0-9\\-]/g, \"_\");\n\nvar remarksParts = [\"Winlink RMS PACTOR gateway\"];\nif (s.freqs && s.freqs.length) { remarksParts.push(\"Freqs (kHz): \" + s.freqs.join(\" \")); }\nremarksParts.push(\"Grid: \" + s.grid + \" (\" + s.location + \")\");\nremarksParts.push(\"Last report: \" + s.lastUpdate);\nif (s.sysop) { remarksParts.push(\"Sysop: \" + s.sysop + \" (\" + s.callsign + \")\"); }\nif (s.email) { remarksParts.push(\"Email: \" + s.email); }\n\nvar cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n    '<event version=\"2.0\" uid=\"' + uid + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n    'time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' +\n    '<point lat=\"' + pos.lat.toFixed(6) + '\" lon=\"' + pos.lon.toFixed(6) + '\" hae=\"0\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n    '<detail>' +\n    '<contact callsign=\"' + xmlEscape(s.channel) + '\"/>' +\n    '<remarks>' + xmlEscape(remarksParts.join(\" | \")) + '</remarks>' +\n    '</detail>' +\n    '</event>';\n\nmsg.payload = cot;\ndelete msg.station;\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 400,
+    "wires": [
+      [
+        "n_debug",
+        "9518c8d665270a17"
+      ]
+    ]
+  },
+  {
+    "id": "n_debug",
+    "type": "debug",
+    "z": "winlink_tab",
+    "name": "CoT out (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 520,
+    "y": 520,
+    "wires": []
+  },
+  {
+    "id": "n_inject2",
+    "type": "inject",
+    "z": "winlink_tab",
+    "name": "Every 15 min (+ on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "900",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "5",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 200,
+    "y": 140,
+    "wires": [
+      [
+        "n_http2"
+      ]
+    ]
+  },
+  {
+    "id": "n_http2",
+    "type": "http request",
+    "z": "winlink_tab",
+    "name": "GET Winlink PUBLIC PACKET (VHF/UHF) listing",
+    "method": "GET",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "https://cms.winlink.org:444/listings/RmsPacketListing.aspx?serviceCodes=PUBLIC",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 490,
+    "y": 280,
+    "wires": [
+      [
+        "n_parse2"
+      ]
+    ]
+  },
+  {
+    "id": "n_parse2",
+    "type": "function",
+    "z": "winlink_tab",
+    "name": "Parse Winlink gateway list (VHF/UHF)",
+    "func": "// Same plain-text block format as the PACTOR (HF) listing, just a different\n// Winlink endpoint (RmsPacketListing.aspx instead of RmsPactorListing.aspx)\n// covering VHF/UHF AX.25 packet / VARA FM gateways instead of HF PACTOR:\n//\n//   VE1HRE-10.WINLINK, Doug Steventon/VE1HRE, [FN84BQ: Halifax, NS], (...)\n//   - 145.070 1200\n//\n// Not an officially documented/versioned API -- same caveat as the PACTOR\n// listing. If Winlink changes the text layout, only this regex needs\n// updating (kept identical to the PACTOR parser on purpose).\n\nvar text = msg.payload || \"\";\nvar lines = text.split(/\\r?\\n/);\n\n// Optional region filter -- see the PACTOR parser for details. Empty = worldwide.\nvar gridPrefixFilter = [];\n\n// VHF/UHF Packet listing uses '.RMS.PACKET' as the channel suffix, NOT\n// '.WINLINK' like the HF/Pactor listing -- confirmed 2026-08-19 against a\n// real fetched copy of this listing. This was the actual bug behind the\n// \"always 0 gateways\" issue: the old regex only ever matched '.WINLINK'\n// and this file never contains that string.\nvar headerRe = /^(\\S+)\\.RMS\\.PACKET,\\s*(.+?)\\/(\\S+),\\s*\\[([A-Za-z0-9]{4,6}):\\s*([^\\]]*)\\],\\s*\\(([^)]+)\\)\\s*$/;\n\nvar stations = [];\nvar current = null;\n\nfor (var i = 0; i < lines.length; i++) {\n    var line = lines[i].trim();\n    var m = headerRe.exec(line);\n    if (m) {\n        if (current) { stations.push(current); }\n        current = {\n            channel: m[1],\n            sysop: m[2].trim(),\n            callsign: m[3].trim(),\n            grid: m[4].toUpperCase(),\n            location: m[5].trim(),\n            lastUpdate: m[6].trim(),\n            freqs: []\n        };\n        continue;\n    }\n    if (current) {\n        if (line.indexOf(\"-\") === 0) {\n            var freqPart = line.replace(/^-\\s*/, \"\");\n            var freqTokens = freqPart.split(/\\s+/).filter(Boolean);\n            current.freqs = current.freqs.concat(freqTokens);\n        } else if (line.indexOf(\"E \") === 0) {\n            current.email = line.substring(2).trim();\n        } else if (line.indexOf(\"H \") === 0) {\n            current.homepage = line.substring(2).trim();\n        }\n    }\n}\nif (current) { stations.push(current); }\n\nif (gridPrefixFilter.length) {\n    stations = stations.filter(function (s) {\n        return gridPrefixFilter.indexOf(s.grid.substring(0, 2)) !== -1;\n    });\n}\n\nnode.status({ fill: \"green\", shape: \"dot\", text: stations.length + \" VHF/UHF gateways parsed\" });\n\nvar msgs = stations.map(function (s) {\n    return { station: s };\n});\n\nreturn [msgs];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 890,
+    "y": 280,
+    "wires": [
+      [
+        "n_cot2"
+      ]
+    ]
+  },
+  {
+    "id": "n_cot2",
+    "type": "function",
+    "z": "winlink_tab",
+    "name": "Build CoT (2525 Signal / network node, VHF/UHF)",
+    "func": "// ---- config -----------------------------------------------------------\n// Same symbol family as the HF/PACTOR branch: friendly / Ground / Unit /\n// Combat Support / Signal. Change here if you want VHF/UHF gateways to\n// render as a visibly different icon/color from the HF ones.\nvar cotType = \"a-f-G-U-U-S\";\nvar staleHours = 20 / 60;\n\n// Tennessee + buffer bounding box -- VHF/UHF/Packet is short-range by\n// nature (unlike HF/PACTOR, which stays worldwide), so gateways outside\n// this box are dropped before ever reaching TAK Server. Same box already\n// used for the Marinesia AIS flow, for consistency across these builds --\n// adjust independently here if you want a different margin for radio vs. AIS.\nvar TN_BBOX = { latMin: 34.7, latMax: 37.0, lonMin: -90.6, lonMax: -81.3 };\n// -------------------------------------------------------------------------\n\nfunction maidenheadToLatLon(loc) {\n    loc = (loc || \"\").toUpperCase();\n    if (loc.length < 4) { return null; }\n    var A = \"ABCDEFGHIJKLMNOPQR\";\n    var lon = (A.indexOf(loc[0]) * 20) - 180;\n    var lat = (A.indexOf(loc[1]) * 10) - 90;\n    lon += parseInt(loc[2], 10) * 2;\n    lat += parseInt(loc[3], 10) * 1;\n    if (loc.length >= 6) {\n        lon += A.indexOf(loc[4]) * (2 / 24);\n        lat += A.indexOf(loc[5]) * (1 / 24);\n        lon += (2 / 24) / 2;\n        lat += (1 / 24) / 2;\n    } else {\n        lon += 1;\n        lat += 0.5;\n    }\n    return { lat: lat, lon: lon };\n}\n\nfunction xmlEscape(s) {\n    return (s || \"\").toString()\n        .replace(/&/g, \"&amp;\")\n        .replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\")\n        .replace(/\"/g, \"&quot;\");\n}\n\nvar s = msg.station;\nif (!s || !s.grid) { return null; }\n\nvar pos = maidenheadToLatLon(s.grid);\nif (!pos) { return null; }\n\n// Drop anything outside the TN + buffer box -- this is the actual\n// region limit for this branch now, applied against the real computed\n// position rather than a coarse grid-prefix match.\nif (pos.lat < TN_BBOX.latMin || pos.lat > TN_BBOX.latMax ||\n    pos.lon < TN_BBOX.lonMin || pos.lon > TN_BBOX.lonMax) {\n    return null;\n}\n\nvar now = new Date();\nvar start = now.toISOString();\nvar stale = new Date(now.getTime() + staleHours * 60 * 60 * 1000).toISOString();\n\n// prefixed \"winlink-vhf-\" (vs. \"winlink-\" for the HF/PACTOR branch) so a\n// sysop running both a Pactor and a Packet channel doesn't collide on uid\nvar uid = \"winlink-vhf-\" + s.channel.replace(/[^A-Za-z0-9\\-]/g, \"_\");\n\nvar remarksParts = [\"Winlink RMS Packet (VHF/UHF) gateway\"];\nif (s.freqs && s.freqs.length) { remarksParts.push(\"Freq/baud: \" + s.freqs.join(\" \")); }\nremarksParts.push(\"Grid: \" + s.grid + \" (\" + s.location + \")\");\nremarksParts.push(\"Last report: \" + s.lastUpdate);\nif (s.sysop) { remarksParts.push(\"Sysop: \" + s.sysop + \" (\" + s.callsign + \")\"); }\nif (s.email) { remarksParts.push(\"Email: \" + s.email); }\n\nvar cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n    '<event version=\"2.0\" uid=\"' + uid + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n    'time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' +\n    '<point lat=\"' + pos.lat.toFixed(6) + '\" lon=\"' + pos.lon.toFixed(6) + '\" hae=\"0\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n    '<detail>' +\n    '<contact callsign=\"' + xmlEscape(s.channel) + '\"/>' +\n    '<remarks>' + xmlEscape(remarksParts.join(\" | \")) + '</remarks>' +\n    '</detail>' +\n    '</event>';\n\nmsg.payload = cot;\ndelete msg.station;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 490,
+    "y": 460,
+    "wires": [
+      [
+        "n_debug2",
+        "9518c8d665270a17"
+      ]
+    ]
+  },
+  {
+    "id": "n_debug2",
+    "type": "debug",
+    "z": "winlink_tab",
+    "name": "CoT out VHF/UHF (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 560,
+    "y": 340,
+    "wires": []
+  },
+  {
+    "id": "9518c8d665270a17",
+    "type": "tcp out",
+    "z": "winlink_tab",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "4c8b4df728fed609",
+    "x": 990,
+    "y": 360,
+    "wires": []
+  },
+  {
+    "id": "4c8b4df728fed609",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

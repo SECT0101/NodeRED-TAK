@@ -1,0 +1,14 @@
+# Never commit TAK certificates or keys
+*.p12
+*.pem
+*.key
+*.crt
+
+# Node-RED credentials and local settings
+*_cred.json
+.config.*.json
+.flows*.backup
+
+# Local test artifacts
+*.log
+.DS_Store

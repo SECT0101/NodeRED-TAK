@@ -1,0 +1,143 @@
+[
+  {
+    "id": "usgs_water_tab",
+    "type": "tab",
+    "label": "USGS Water → TAK",
+    "disabled": false,
+    "info": "River and stream gauges: gauge height and flow at every active USGS site in Tennessee (plus a small buffer).\n\nData: USGS Water Services (https://waterservices.usgs.gov/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set a contact email in the User-Agent header of the USGS request node (USGS asks for one).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/usgs-water",
+    "env": []
+  },
+  {
+    "id": "setup_water_tab",
+    "type": "comment",
+    "z": "usgs_water_tab",
+    "name": "SETUP - read me (double-click)",
+    "info": "River and stream gauges: gauge height and flow at every active USGS site in Tennessee (plus a small buffer).\n\nData: USGS Water Services (https://waterservices.usgs.gov/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set a contact email in the User-Agent header of the USGS request node (USGS asks for one).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/usgs-water",
+    "x": 230,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "usgs_w_inject",
+    "type": "inject",
+    "z": "usgs_water_tab",
+    "name": "Every 15 min (+ on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "900",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "3",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 190,
+    "y": 100,
+    "wires": [
+      [
+        "usgs_w_http"
+      ]
+    ]
+  },
+  {
+    "id": "usgs_w_http",
+    "type": "http request",
+    "z": "usgs_water_tab",
+    "name": "GET waterservices.usgs.gov/nwis/iv",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://waterservices.usgs.gov/nwis/iv/?format=json&bBox=-91.2,34.3,-82.0,37.2&parameterCd=00060,00065&siteStatus=active",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [
+      {
+        "keyType": "other",
+        "keyValue": "User-Agent",
+        "valueType": "other",
+        "valueValue": "NodeRED-TAK (contact: your-email-here)"
+      }
+    ],
+    "x": 500,
+    "y": 100,
+    "wires": [
+      [
+        "usgs_w_parse"
+      ]
+    ]
+  },
+  {
+    "id": "usgs_w_parse",
+    "type": "function",
+    "z": "usgs_water_tab",
+    "name": "Group timeSeries by site + build CoT",
+    "func": "var cotType = 'b-m-p-s-m';\nvar colorValue = -16776961; // blue -- water\nvar channelName = 'USGS Streamflow';\nvar staleHours = 20 / 60; // USGS IV data updates every 15-60 min\n\nfunction esc(s) {\n    return String(s == null ? '' : s)\n        .replace(/&/g, '&amp;').replace(/</g, '&lt;')\n        .replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n}\n\nvar allSeries = (msg.payload && msg.payload.value && msg.payload.value.timeSeries) || [];\nvar sites = {};\n\nallSeries.forEach(function (ts) {\n    var src = ts.sourceInfo;\n    if (!src) { return; }\n    var siteCode = src.siteCode && src.siteCode[0] && src.siteCode[0].value;\n    if (!siteCode) { return; }\n    var geo = src.geoLocation && src.geoLocation.geogLocation;\n    if (!geo) { return; }\n\n    if (!sites[siteCode]) {\n        sites[siteCode] = {\n            name: src.siteName || ('Site ' + siteCode),\n            lat: parseFloat(geo.latitude),\n            lon: parseFloat(geo.longitude),\n            params: []\n        };\n    }\n\n    var varInfo = ts.variable || {};\n    var varName = (varInfo.variableName || 'value').split(',')[0];\n    var latestVal = ts.values && ts.values[0] && ts.values[0].value && ts.values[0].value[0];\n    if (latestVal) {\n        sites[siteCode].params.push({\n            name: varName,\n            value: latestVal.value,\n            dateTime: latestVal.dateTime\n        });\n    }\n});\n\nvar msgs = [];\nObject.keys(sites).forEach(function (siteCode) {\n    var s = sites[siteCode];\n    if (!s.lat || !s.lon || !s.params.length) { return; }\n\n    var now = new Date();\n    var start = now.toISOString();\n    var stale = new Date(now.getTime() + staleHours * 3600000).toISOString();\n    var uid = 'usgs-water-' + siteCode;\n\n    var remarksParts = [s.name, 'Site ' + siteCode];\n    s.params.forEach(function (p) {\n        remarksParts.push(p.name + ': ' + p.value + ' (as of ' + p.dateTime + ')');\n    });\n\n    var cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n        '<event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n        'time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' +\n        '<point lat=\"' + s.lat + '\" lon=\"' + s.lon + '\" hae=\"0\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n        '<detail>' +\n        '<contact callsign=\"' + esc(s.name) + '\"/>' +\n        '<color value=\"' + colorValue + '\"/>' +\n        '<remarks>' + esc(remarksParts.join(' | ')) + '</remarks>' +\n        '<marti><dest name=\"' + esc(channelName) + '\"/></marti>' +\n        '</detail>' +\n        '</event>';\n\n    msgs.push({ payload: cot });\n});\n\nnode.status({ fill: 'blue', shape: 'dot', text: msgs.length + ' gauges in TN bbox' });\nif (!msgs.length) { return null; }\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 850,
+    "y": 100,
+    "wires": [
+      [
+        "usgs_w_debug",
+        "18a0713e095fecc9"
+      ]
+    ]
+  },
+  {
+    "id": "usgs_w_debug",
+    "type": "debug",
+    "z": "usgs_water_tab",
+    "name": "CoT out (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1100,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "18a0713e095fecc9",
+    "type": "tcp out",
+    "z": "usgs_water_tab",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "2740cb451639419d",
+    "x": 1200,
+    "y": 60,
+    "wires": []
+  },
+  {
+    "id": "2740cb451639419d",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

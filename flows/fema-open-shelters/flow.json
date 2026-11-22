@@ -1,0 +1,117 @@
+[
+  {
+    "id": "da573c551ad4c021",
+    "type": "tab",
+    "label": "FEMA Open Shelters → TAK",
+    "disabled": false,
+    "info": "Open shelters in Tennessee from the FEMA National Shelter System (Red Cross and partners). Closed shelters are left off.\n\nData: FEMA National Shelter System (https://gis.fema.gov/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/fema-open-shelters"
+  },
+  {
+    "id": "setup551ad4c021",
+    "type": "comment",
+    "z": "da573c551ad4c021",
+    "name": "SETUP - read me (double-click)",
+    "info": "Open shelters in Tennessee from the FEMA National Shelter System (Red Cross and partners). Closed shelters are left off.\n\nData: FEMA National Shelter System (https://gis.fema.gov/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/fema-open-shelters",
+    "x": 190,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "c93a980049d7c1ea",
+    "type": "inject",
+    "z": "da573c551ad4c021",
+    "name": "Every 15 min",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "900",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "15",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 150,
+    "y": 120,
+    "wires": [
+      [
+        "2c1f873eb1c0f3ec"
+      ]
+    ]
+  },
+  {
+    "id": "2c1f873eb1c0f3ec",
+    "type": "http request",
+    "z": "da573c551ad4c021",
+    "name": "GET FEMA Open Shelters (TN)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://gis.fema.gov/arcgis/rest/services/NSS/OpenShelters/MapServer/0/query?where=state%3D'TN'&outFields=*&returnGeometry=true&outSR=4326&f=json",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 380,
+    "y": 120,
+    "wires": [
+      [
+        "4184865ca1d8c4b5"
+      ]
+    ]
+  },
+  {
+    "id": "4184865ca1d8c4b5",
+    "type": "function",
+    "z": "da573c551ad4c021",
+    "name": "Build Shelter CoT",
+    "func": "function esc(s) { return String(s == null ? \"\" : s).replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\").replace(/'/g, \"&apos;\"); }\nfunction localTime(t) { const d = new Date(t); return isNaN(d) ? String(t || \"\") : d.toLocaleString(\"en-US\", { timeZone: \"America/Chicago\", month: \"short\", day: \"numeric\", hour: \"numeric\", minute: \"2-digit\", timeZoneName: \"short\" }); }\nfunction cotEvent(uid, type, lat, lon, staleMs, inner) {\n    const now = new Date(); const t = now.toISOString(); const st = new Date(now.getTime() + staleMs).toISOString();\n    return '<?xml version=\"1.0\" standalone=\"yes\"?><event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"' + type + '\" time=\"' + t + '\" start=\"' + t + '\" stale=\"' + st + '\" how=\"h-g-i-g-o\">' +\n        '<point lat=\"' + Number(lat).toFixed(5) + '\" lon=\"' + Number(lon).toFixed(5) + '\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/><detail>' + inner + '</detail></event>';\n}\n// FEMA National Shelter System -- open shelters in Tennessee\nconst res = msg.payload;\nif (!res || !Array.isArray(res.features)) { node.status({ fill: \"red\", shape: \"ring\", text: \"bad shelter response (HTTP \" + msg.statusCode + \")\" }); return null; }\nconst ICON = \"f8f7f666-8b28-4b57-9fbb-e48e61d33b79/Iron Sites/Emergency Shelter.png\";\nconst out = []; let pop = 0;\nres.features.forEach(function (f) {\n    const a = f.attributes || {}, g = f.geometry || {};\n    const lat = Number(a.latitude != null ? a.latitude : g.y), lon = Number(a.longitude != null ? a.longitude : g.x);\n    if (!isFinite(lat) || !isFinite(lon)) { return; }\n    const status = String(a.shelter_status || \"\").toUpperCase();\n    if (status === \"CLOSED\") { return; }\n    pop += Number(a.total_population) || 0;\n    const cap = [a.evacuation_capacity ? \"Evac cap \" + a.evacuation_capacity : \"\", a.post_impact_capacity ? \"Post-impact cap \" + a.post_impact_capacity : \"\"].filter(Boolean).join(\", \");\n    const remarks = [\n        \"Shelter \" + (status || \"STATUS UNKNOWN\"),\n        a.org_name || \"\",\n        [a.address, a.city, a.state, a.zip].filter(Boolean).join(\", \"),\n        \"Population \" + (a.total_population != null ? a.total_population : \"?\") + (cap ? \" (\" + cap + \")\" : \"\"),\n        a.pet_accommodations_code ? \"Pets: \" + a.pet_accommodations_code : \"\",\n        (a.ada_compliant ? \"ADA: \" + a.ada_compliant : \"\") + (a.wheelchair_accessible ? \" / Wheelchair: \" + a.wheelchair_accessible : \"\"),\n        (a.hours_open || a.hours_close) ? \"Hours: \" + (a.hours_open || \"?\") + \"-\" + (a.hours_close || \"?\") : \"\",\n        \"FEMA National Shelter System\"\n    ].filter(function (s) { return s && String(s).trim(); }).join(\" | \");\n    out.push({ payload: cotEvent(\"SHELTER-\" + (a.shelter_id || a.objectid), \"a-f-G\", lat, lon, 20 * 60 * 1000,\n        '<contact callsign=\"' + esc(a.shelter_name || \"Shelter\") + '\"/>' +\n        '<usericon iconsetpath=\"' + esc(ICON) + '\"/>' +\n        '<remarks>' + esc(remarks) + '</remarks>') });\n});\nnode.status({ fill: out.length ? \"green\" : \"grey\", shape: \"dot\", text: out.length ? out.length + \" open shelters in TN, \" + pop + \" occupants\" : \"no open shelters in TN\" });\nreturn [out];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 620,
+    "y": 120,
+    "wires": [
+      [
+        "51021ff4d47b4346"
+      ]
+    ]
+  },
+  {
+    "id": "51021ff4d47b4346",
+    "type": "tcp out",
+    "z": "da573c551ad4c021",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "ed26fd7c5a633c90",
+    "x": 860,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "ed26fd7c5a633c90",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

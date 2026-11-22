@@ -1,0 +1,259 @@
+[
+  {
+    "id": "glm_tab_0001",
+    "type": "tab",
+    "label": "GOES Lightning (GLM) → TAK",
+    "disabled": false,
+    "info": "Lightning flashes over Tennessee (plus a small buffer) from the GOES-East Geostationary Lightning Mapper, colored by age (yellow under 5 min, orange 5-10, red 10-15) with flash energy and size in the remarks. Markers drop off after 15 minutes.\n\nData: NOAA GOES-R GLM on AWS Open Data (https://registry.opendata.aws/noaa-goes/). Updates every 60 seconds (new satellite files every 20 seconds).\n\nNeeds: The jsfive module (see *Satellite and GOES flows* in the main README: same functionExternalModules: true setting).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Optional: set TAK_CHANNEL in the tab's Environment Variables to send the markers to a TAK channel (for example NWS).\n3. Optional: set GOES_BUCKET to noaa-goes18 for GOES-West (default noaa-goes19, GOES-East).\n4. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/goes-glm-lightning",
+    "env": [
+      {
+        "name": "GOES_BUCKET",
+        "value": "noaa-goes19",
+        "type": "str"
+      },
+      {
+        "name": "TAK_CHANNEL",
+        "value": "",
+        "type": "str"
+      }
+    ]
+  },
+  {
+    "id": "setupglm_0001",
+    "type": "comment",
+    "z": "glm_tab_0001",
+    "name": "SETUP - read me (double-click)",
+    "info": "Lightning flashes over Tennessee (plus a small buffer) from the GOES-East Geostationary Lightning Mapper, colored by age (yellow under 5 min, orange 5-10, red 10-15) with flash energy and size in the remarks. Markers drop off after 15 minutes.\n\nData: NOAA GOES-R GLM on AWS Open Data (https://registry.opendata.aws/noaa-goes/). Updates every 60 seconds (new satellite files every 20 seconds).\n\nNeeds: The jsfive module (see *Satellite and GOES flows* in the main README: same functionExternalModules: true setting).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Optional: set TAK_CHANNEL in the tab's Environment Variables to send the markers to a TAK channel (for example NWS).\n3. Optional: set GOES_BUCKET to noaa-goes18 for GOES-West (default noaa-goes19, GOES-East).\n4. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/goes-glm-lightning",
+    "x": 160,
+    "y": 30,
+    "wires": []
+  },
+  {
+    "id": "glm_inj_list",
+    "type": "inject",
+    "z": "glm_tab_0001",
+    "x": 150,
+    "y": 80,
+    "name": "Every 60s (+ on deploy)",
+    "props": [],
+    "repeat": "60",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "3",
+    "topic": "",
+    "wires": [
+      [
+        "glm_fn_list"
+      ]
+    ]
+  },
+  {
+    "id": "glm_fn_list",
+    "type": "function",
+    "z": "glm_tab_0001",
+    "x": 370,
+    "y": 80,
+    "name": "List newest GLM files",
+    "func": "// Lists the newest GLM flash files in NOAA's public GOES archive on AWS.\n// Bucket: GOES-East (noaa-goes19) covers Tennessee. Set GOES_BUCKET in the\n// tab's Environment Variables to use another (e.g. noaa-goes18 for GOES-West).\nconst bucket = env.get(\"GOES_BUCKET\") || \"noaa-goes19\";\nfunction prefix(d) {\n    const y = d.getUTCFullYear();\n    const start = Date.UTC(y, 0, 1);\n    const doy = String(Math.floor((d.getTime() - start) / 86400000) + 1).padStart(3, \"0\");\n    const hh = String(d.getUTCHours()).padStart(2, \"0\");\n    return \"GLM-L2-LCFA/\" + y + \"/\" + doy + \"/\" + hh + \"/\";\n}\nconst now = new Date();\nconst out = [{ url: \"https://\" + bucket + \".s3.amazonaws.com/?list-type=2&prefix=\" + prefix(now), bucket: bucket }];\nif (now.getUTCMinutes() < 2) {          // just after the hour: also check the end of the previous hour\n    out.unshift({ url: \"https://\" + bucket + \".s3.amazonaws.com/?list-type=2&prefix=\" + prefix(new Date(now.getTime() - 3600000)), bucket: bucket });\n}\nreturn [out];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "wires": [
+      [
+        "glm_http_list"
+      ]
+    ]
+  },
+  {
+    "id": "glm_http_list",
+    "type": "http request",
+    "z": "glm_tab_0001",
+    "x": 590,
+    "y": 80,
+    "name": "GET S3 listing",
+    "method": "GET",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "wires": [
+      [
+        "glm_fn_pick"
+      ]
+    ]
+  },
+  {
+    "id": "glm_fn_pick",
+    "type": "function",
+    "z": "glm_tab_0001",
+    "x": 800,
+    "y": 80,
+    "name": "Pick new files",
+    "func": "// Picks GLM files we have not read yet (newest first, at most MAX_FILES per run).\nconst MAX_FILES = 6;\nif (msg.statusCode !== 200) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"listing HTTP \" + msg.statusCode });\n    return null;\n}\nconst keys = [];\nconst re = /<Key>([^<]+\\.nc)<\\/Key>/g;\nlet m;\nwhile ((m = re.exec(String(msg.payload))) !== null) keys.push(m[1]);\nif (!keys.length) { node.status({ fill: \"grey\", shape: \"dot\", text: \"no files yet this hour\" }); return null; }\nkeys.sort();                                   // file names start with the scan start time, so they sort by time\nlet last = flow.get(\"glmLastKey\") || \"\";\nlet fresh = keys.filter(k => k.split(\"/\").pop() > last.split(\"/\").pop());\nif (!last) fresh = keys.slice(-3);             // first run: only the last minute\nfresh = fresh.slice(-MAX_FILES);\nif (!fresh.length) return null;\nflow.set(\"glmLastKey\", fresh[fresh.length - 1]);\nnode.status({ fill: \"green\", shape: \"dot\", text: fresh.length + \" new file(s), last \" + fresh[fresh.length - 1].split(\"_\")[3] });\nreturn [fresh.map(k => ({ url: \"https://\" + msg.bucket + \".s3.amazonaws.com/\" + k, key: k }))];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "wires": [
+      [
+        "glm_http_file"
+      ]
+    ]
+  },
+  {
+    "id": "glm_http_file",
+    "type": "http request",
+    "z": "glm_tab_0001",
+    "x": 380,
+    "y": 160,
+    "name": "GET GLM file",
+    "method": "GET",
+    "ret": "bin",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "wires": [
+      [
+        "glm_fn_parse"
+      ]
+    ]
+  },
+  {
+    "id": "glm_fn_parse",
+    "type": "function",
+    "z": "glm_tab_0001",
+    "x": 600,
+    "y": 160,
+    "name": "Read flashes (jsfive)",
+    "func": "// Reads one GLM L2 LCFA netCDF file (HDF5) with jsfive and stores the flashes\n// inside the area box in the flow cache. \"Send flashes to TAK\" does the sending.\nconst BBOX = { latMin: 34.3, latMax: 37.2, lonMin: -91.2, lonMax: -82.0 };   // Tennessee + buffer\nif (msg.statusCode !== 200 || !Buffer.isBuffer(msg.payload)) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"download HTTP \" + msg.statusCode });\n    return null;\n}\nlet f;\ntry {\n    const buf = msg.payload;\n    f = new jsfive.File(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));\n    const attr = (d, n) => { const a = d.attrs[n]; if (a === undefined) return null; return Array.isArray(a) ? a[0] : a; };\n    function read(name) {\n        let d;\n        try { d = f.get(name); } catch (e) { return { v: [], units: \"\" }; }\n        if (!d) return { v: [], units: \"\" };\n        let v = d.value;\n        v = (typeof v === \"number\") ? [v] : Array.from(v);\n        if (attr(d, \"_Unsigned\") === \"true\") {                       // netCDF unsigned stored in a signed type\n            const m = /i(\\d)/.exec(d.dtype || \"\");\n            const bits = m ? +m[1] * 8 : 0;\n            if (bits) v = v.map(x => x < 0 ? x + Math.pow(2, bits) : x);\n        }\n        const sf = attr(d, \"scale_factor\"), ao = attr(d, \"add_offset\");\n        if (sf !== null || ao !== null) v = v.map(x => x * (sf === null ? 1 : sf) + (ao === null ? 0 : ao));\n        return { v: v, units: attr(d, \"units\") || \"\" };\n    }\n    function since(units) {                                         // \"seconds since 2026-11-22 15:30:00.000\" -> epoch ms\n        const mm = /since\\s+(\\d{4}-\\d{2}-\\d{2})[ T](\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)/.exec(units || \"\");\n        return mm ? Date.parse(mm[1] + \"T\" + mm[2] + \"Z\") : NaN;\n    }\n    const lat = read(\"flash_lat\").v, lon = read(\"flash_lon\").v;\n    const id = read(\"flash_id\").v, q = read(\"flash_quality_flag\").v;\n    const en = read(\"flash_energy\").v, ar = read(\"flash_area\").v;\n    const t0 = read(\"flash_time_offset_of_first_event\");\n    let base = since(t0.units);\n    if (isNaN(base)) {                                              // fall back to product_time\n        const pt = read(\"product_time\");\n        base = since(pt.units) + (pt.v[0] || 0) * 1000;\n    }\n    const sat = (/_G(\\d{2})_/.exec(msg.key || \"\") || [])[1] || \"\";\n    const scan = (/_s(\\d{14})/.exec(msg.key || \"\") || [])[1] || String(Date.now());\n    const cache = flow.get(\"glmFlashes\") || {};\n    let added = 0;\n    for (let i = 0; i < lat.length; i++) {\n        if (q.length && q[i] !== 0) continue;                       // keep good-quality flashes only\n        if (lat[i] < BBOX.latMin || lat[i] > BBOX.latMax || lon[i] < BBOX.lonMin || lon[i] > BBOX.lonMax) continue;\n        const uid = \"GLM-G\" + sat + \"-\" + scan + \"-\" + id[i];\n        if (cache[uid]) continue;\n        cache[uid] = {\n            lat: +lat[i].toFixed(4), lon: +lon[i].toFixed(4),\n            t: Math.round(base + (t0.v[i] || 0) * 1000),\n            fj: en.length ? Math.round(en[i] * 1e15) : null,        // femtojoules\n            km2: ar.length ? Math.round(ar[i] / 1e6) : null,\n            sat: sat\n        };\n        added++;\n    }\n    flow.set(\"glmFlashes\", cache);\n    node.status({ fill: \"green\", shape: \"dot\", text: lat.length + \" flashes in file, \" + added + \" in area\" });\n} catch (e) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"read failed: \" + e.message });\n    node.warn(\"GLM read failed for \" + msg.key + \": \" + e.message);\n}\nreturn null;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [
+      {
+        "var": "jsfive",
+        "module": "jsfive"
+      }
+    ],
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "glm_inj_send",
+    "type": "inject",
+    "z": "glm_tab_0001",
+    "x": 150,
+    "y": 240,
+    "name": "Every 60s",
+    "props": [],
+    "repeat": "60",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "20",
+    "topic": "",
+    "wires": [
+      [
+        "glm_fn_send"
+      ]
+    ]
+  },
+  {
+    "id": "glm_fn_send",
+    "type": "function",
+    "z": "glm_tab_0001",
+    "x": 370,
+    "y": 240,
+    "name": "Send flashes to TAK",
+    "func": "// Sends every cached flash from the last 15 minutes to TAK, colored by age:\n// yellow 0-5 min, orange 5-10 min, red 10-15 min. Markers expire on their own.\nconst KEEP_MIN = 15, MAX_MARKERS = 500;\nconst channel = env.get(\"TAK_CHANNEL\") || \"\";                // optional TAK channel (e.g. NWS), set in the tab's Environment Variables\nconst COLORS = [[5, \"-256\", \"yellow\"], [10, \"-32768\", \"orange\"], [15, \"-65536\", \"red\"]];   // ARGB ints\nconst now = Date.now();\nconst cache = flow.get(\"glmFlashes\") || {};\nconst live = [];\nfor (const uid in cache) {\n    const c = cache[uid];\n    if (now - c.t > KEEP_MIN * 60000) { delete cache[uid]; continue; }\n    live.push([uid, c]);\n}\nflow.set(\"glmFlashes\", cache);\nlive.sort((a, b) => b[1].t - a[1].t);\nconst pick = live.slice(0, MAX_MARKERS);\nfunction iso(ms) { return new Date(ms).toISOString(); }\nfunction esc(s) { return String(s).replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\"); }\nconst out = pick.map(([uid, c]) => {\n    const age = Math.max(0, (now - c.t) / 60000);\n    const col = COLORS.find(x => age < x[0]) || COLORS[COLORS.length - 1];\n    const hhmmss = iso(c.t).substr(11, 8) + \"Z\";\n    const remarks = \"Lightning flash (GOES-\" + c.sat + \" GLM) at \" + hhmmss +\n        (c.fj !== null ? \" | energy \" + c.fj + \" fJ\" : \"\") + (c.km2 !== null ? \" | area \" + c.km2 + \" km2\" : \"\") +\n        \" | \" + Math.floor(age) + \" min ago | NOAA GOES-R GLM\";\n    return { payload:\n        '<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>' +\n        '<event version=\"2.0\" uid=\"' + uid + '\" type=\"b-m-p-s-m\" how=\"m-g\" time=\"' + iso(now) + '\" start=\"' + iso(c.t) +\n        '\" stale=\"' + iso(c.t + KEEP_MIN * 60000) + '\">' +\n        '<point lat=\"' + c.lat + '\" lon=\"' + c.lon + '\" hae=\"9999999\" ce=\"8000\" le=\"9999999\"/>' +\n        '<detail><contact callsign=\"' + esc(\"Lightning \" + hhmmss) + '\"/>' +\n        '<color argb=\"' + col[1] + '\"/><remarks>' + esc(remarks) + '</remarks>' +\n        (channel ? '<marti><dest name=\"' + esc(channel) + '\"/></marti>' : '') + '</detail></event>' };\n});\nnode.status({ fill: out.length ? \"yellow\" : \"grey\", shape: \"dot\", text: out.length + \" flash(es) on map\" });\nreturn [out];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "wires": [
+      [
+        "glm_tcp"
+      ]
+    ]
+  },
+  {
+    "id": "glm_tcp",
+    "type": "tcp out",
+    "z": "glm_tab_0001",
+    "x": 600,
+    "y": 240,
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "glm_tls_0001",
+    "wires": []
+  },
+  {
+    "id": "glm_catch",
+    "type": "catch",
+    "z": "glm_tab_0001",
+    "x": 140,
+    "y": 320,
+    "name": "Errors",
+    "scope": null,
+    "uncaught": false,
+    "wires": [
+      [
+        "glm_dbg"
+      ]
+    ]
+  },
+  {
+    "id": "glm_dbg",
+    "type": "debug",
+    "z": "glm_tab_0001",
+    "x": 340,
+    "y": 320,
+    "name": "Flow errors",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "wires": []
+  },
+  {
+    "id": "glm_tls_0001",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

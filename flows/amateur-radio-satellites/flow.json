@@ -1,0 +1,552 @@
+[
+  {
+    "id": "0d1b7df99b9064e7",
+    "type": "tab",
+    "label": "Amateur Radio Satellites → TAK",
+    "disabled": false,
+    "info": "Live positions of active amateur radio satellites, with uplink and downlink frequencies from SatNOGS.\n\nData: Space-Track.org and SatNOGS DB (https://www.space-track.org/). Updates every 30 seconds (orbits refreshed every 6 hours).\n\nNeeds: A free [Space-Track.org](https://www.space-track.org/auth/createAccount) account; The satellite.js module (see *Satellite and GOES flows* in the main README).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set SPACETRACK_USER and SPACETRACK_PASS in the tab's Environment Variables (keep the password type as *credential*).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/amateur-radio-satellites",
+    "env": [
+      {
+        "name": "SPACETRACK_USER",
+        "value": "",
+        "type": "str"
+      },
+      {
+        "name": "SPACETRACK_PASS",
+        "type": "cred"
+      }
+    ]
+  },
+  {
+    "id": "setupf99b9064e7",
+    "type": "comment",
+    "z": "0d1b7df99b9064e7",
+    "name": "SETUP - read me (double-click)",
+    "info": "Live positions of active amateur radio satellites, with uplink and downlink frequencies from SatNOGS.\n\nData: Space-Track.org and SatNOGS DB (https://www.space-track.org/). Updates every 30 seconds (orbits refreshed every 6 hours).\n\nNeeds: A free [Space-Track.org](https://www.space-track.org/auth/createAccount) account; The satellite.js module (see *Satellite and GOES flows* in the main README).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set SPACETRACK_USER and SPACETRACK_PASS in the tab's Environment Variables (keep the password type as *credential*).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/amateur-radio-satellites",
+    "x": 200,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "771c06a3cc174228",
+    "type": "inject",
+    "z": "0d1b7df99b9064e7",
+    "name": "Refresh from Space-Track (every 6h + on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "21600",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "20",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 270,
+    "y": 60,
+    "wires": [
+      [
+        "fc9efee57b1a1c21"
+      ]
+    ]
+  },
+  {
+    "id": "fc9efee57b1a1c21",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Circuit Gate (ham)",
+    "func": "// ---- config -------------------------------------------------------\n// Unique per tab -- this is the key everything (breaker state, failure\n// count, cooldown) is tracked under. NOTE: the CelesTrak-era versions of\n// these flows all used the literal string 'example-source' here, which\n// meant a trip on ANY of them silently blocked ALL of them. Fixed here.\nvar sourceName = 'spacetrack-ham';\n\n// Space-Track can suspend accounts for abuse, not just rate-limit a single\n// request -- longer cooldown than the old CelesTrak breaker (30m) is\n// deliberate here.\nvar cooldownMinutes = 60;\n// ---------------------------------------------------------------------\n\nvar key = 'circuitBreaker_' + sourceName;\nvar state = flow.get(key) || { open: false, failCount: 0, openedAt: 0 };\n\nif (state.open) {\n    var elapsedMin = (Date.now() - state.openedAt) / 60000;\n    if (elapsedMin < cooldownMinutes) {\n        node.status({ fill: 'red', shape: 'ring', text: sourceName + ': OPEN (' + Math.round(cooldownMinutes - elapsedMin) + 'm left)' });\n        return null;\n    }\n    node.status({ fill: 'yellow', shape: 'dot', text: sourceName + ': testing recovery' });\n}\n\nmsg._circuitBreakerSource = sourceName;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 830,
+    "y": 60,
+    "wires": [
+      [
+        "540d133b56794aa1"
+      ]
+    ]
+  },
+  {
+    "id": "1c08438a5f4aa73d",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Build Space-Track query",
+    "func": "// ---- NORAD ID list --------------------------------------------------\n// Populated dynamically from SatNOGS DB (see 'Refresh amateur ID list from\n// SatNOGS' timer + 'Parse SatNOGS -> NORAD ID list' function elsewhere in\n// this tab) rather than hardcoded -- CelesTrak's 'amateur' categorization\n// isn't a Space-Track concept, and this list changes as cubesats launch/decay.\nvar NORAD_IDS = flow.get('ham_amateur_ids') || [];\nvar CHUNK_SIZE = 300; // keeps each Space-Track query URL to a sane length\n// -----------------------------------------------------------------------\n\nif (!NORAD_IDS.length) {\n    node.status({ fill: 'grey', shape: 'ring', text: 'waiting for first SatNOGS refresh' });\n    return null;\n}\n\nvar cookie = flow.get('spacetrack_session_cookie');\nif (!cookie) {\n    node.status({ fill: 'red', shape: 'ring', text: 'no session cookie -- login step failed upstream' });\n    return null;\n}\n\nvar chunks = [];\nfor (var i = 0; i < NORAD_IDS.length; i += CHUNK_SIZE) {\n    chunks.push(NORAD_IDS.slice(i, i + CHUNK_SIZE));\n}\n\nvar msgs = chunks.map(function (chunk) {\n    var queryUrl = 'https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/' +\n        chunk.join(',') + '/orderby/NORAD_CAT_ID/format/json';\n    return {\n        url: queryUrl,\n        method: 'GET',\n        headers: { Cookie: cookie },\n        _circuitBreakerSource: msg._circuitBreakerSource\n    };\n});\n\nnode.status({ fill: 'blue', shape: 'dot', text: 'querying ' + NORAD_IDS.length + ' IDs in ' + msgs.length + ' request(s)' });\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1150,
+    "y": 120,
+    "wires": [
+      [
+        "e5bc6213a04cbf18"
+      ]
+    ]
+  },
+  {
+    "id": "e5bc6213a04cbf18",
+    "type": "http request",
+    "z": "0d1b7df99b9064e7",
+    "name": "GET Space-Track query (session cookie)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 240,
+    "y": 220,
+    "wires": [
+      [
+        "f745b1337507e465"
+      ]
+    ]
+  },
+  {
+    "id": "f745b1337507e465",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Check Response",
+    "func": "// ---- config ---------------------------------------------------------\nvar ERROR_CODES = [301, 400, 401, 403, 404, 429, 500, 502, 503, 504];\nvar TRIP_THRESHOLD = 1;\n// -----------------------------------------------------------------------\n\nvar sourceName = msg._circuitBreakerSource || node.id;\nvar key = 'circuitBreaker_' + sourceName;\nvar state = flow.get(key) || { open: false, failCount: 0, openedAt: 0 };\n\nvar code = msg.statusCode;\n// Space-Track returns HTTP 200 with a JSON/HTML error body on bad login\n// or bad query syntax rather than always using a 4xx -- catch that too.\nvar bodyLooksLikeError = typeof msg.payload === 'string' &&\n    /error|invalid|denied/i.test(msg.payload.slice(0, 300));\nvar isError = ERROR_CODES.indexOf(code) !== -1 || bodyLooksLikeError;\n\nif (isError) {\n    state.failCount = (state.failCount || 0) + 1;\n    if (state.failCount >= TRIP_THRESHOLD) {\n        state.open = true;\n        state.openedAt = Date.now();\n        state.lastError = { code: code, at: new Date().toISOString() };\n        flow.set('ham_last_error_body', msg.payload);\n        flow.set(key, state);\n        node.error('CIRCUIT BREAKER TRIPPED: ' + sourceName + ' returned HTTP ' + code + ' -- BODY: ' + JSON.stringify(msg.payload), msg);\n        node.status({ fill: 'red', shape: 'dot', text: sourceName + ': TRIPPED (HTTP ' + code + ')' });\n        return [null, { payload: { sourceName: sourceName, statusCode: code, failCount: state.failCount, timestamp: new Date().toISOString() } }];\n    }\n    flow.set(key, state);\n    node.warn(sourceName + ': error ' + code + ' (' + state.failCount + '/' + TRIP_THRESHOLD + ' before trip)');\n    return [null, null];\n}\n\nif (state.failCount > 0 || state.open) {\n    node.status({ fill: 'green', shape: 'dot', text: sourceName + ': recovered' });\n}\nflow.set(key, { open: false, failCount: 0, openedAt: 0 });\nreturn [msg, null];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 570,
+    "y": 220,
+    "wires": [
+      [
+        "d3d97af6faa206f0"
+      ],
+      [
+        "5c7f2f4737f512f4"
+      ]
+    ]
+  },
+  {
+    "id": "d3d97af6faa206f0",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Parse GP response + cache",
+    "func": "// Space-Track's class/gp JSON gives TLE_LINE1/TLE_LINE2, OBJECT_NAME and\n// COUNTRY_CODE in the SAME record -- one call (per chunk) replaces\n// CelesTrak's two (gp.php TLE + separate satcat/records.php OWNER lookup).\nvar arr = Array.isArray(msg.payload) ? msg.payload : [];\nvar newSats = [];\narr.forEach(function (o) {\n    if (o && o.TLE_LINE1 && o.TLE_LINE2) {\n        newSats.push({\n            name: o.OBJECT_NAME || ('NORAD ' + o.NORAD_CAT_ID),\n            line1: o.TLE_LINE1,\n            line2: o.TLE_LINE2,\n            noradId: String(o.NORAD_CAT_ID),\n            country: o.COUNTRY_CODE || 'UNKNOWN'\n        });\n    }\n});\n\n// FIXED 2026-08-30: previously merged forever, never purging objects that\n// fell out of a since-narrowed ham_amateur_ids list -- stale non-amateur\n// satellites (fetched back when the ID list was unfiltered) never got\n// removed. Now only keeps existing entries that are still in the CURRENT\n// ID list, in addition to merging in this chunk's new results.\nvar currentIds = {};\n(flow.get('ham_amateur_ids') || []).forEach(function (id) { currentIds[String(id)] = true; });\n\nvar existing = flow.get('ham_sats') || [];\nvar map = {};\nexisting.forEach(function (s) { if (currentIds[s.noradId]) { map[s.noradId] = s; } });\nnewSats.forEach(function (s) { map[s.noradId] = s; });\nvar merged = Object.keys(map).map(function (k) { return map[k]; });\n\nflow.set('ham_sats', merged);\nnode.status({ fill: 'blue', shape: 'dot', text: merged.length + ' objects cached' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 860,
+    "y": 200,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "5c7f2f4737f512f4",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Build Alert CoT",
+    "func": "var channelName = 'SystemAlerts';\nvar markerLat = 36.1627; var markerLon = -86.7816; // adjust to your AOI\nvar staleMinutes = 60;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\n\nvar a = msg.payload;\nvar now = new Date(); var start = now.toISOString();\nvar stale = new Date(now.getTime() + staleMinutes * 60000).toISOString();\nvar uid = 'circuit-alert-' + a.sourceName;\nvar remarks = 'CIRCUIT BREAKER TRIPPED | Source: ' + a.sourceName + ' | HTTP ' + a.statusCode +\n    ' | Failures: ' + a.failCount + ' | Since: ' + a.timestamp + ' | Further queries blocked until cooldown expires';\nvar cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n    '<event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"b-m-p-s-m\" how=\"m-g\" ' +\n    'time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' +\n    '<point lat=\"' + markerLat + '\" lon=\"' + markerLon + '\" hae=\"0\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n    '<detail><contact callsign=\"ALERT: ' + esc(a.sourceName) + '\"/><color value=\"-65536\"/>' +\n    '<remarks>' + esc(remarks) + '</remarks><marti><dest name=\"' + esc(channelName) + '\"/></marti></detail></event>';\nmsg.payload = cot;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 820,
+    "y": 300,
+    "wires": [
+      [
+        "27c64504c4313698"
+      ]
+    ]
+  },
+  {
+    "id": "cdc336596c1e8ebe",
+    "type": "inject",
+    "z": "0d1b7df99b9064e7",
+    "name": "MANUAL RESET (click to clear breaker)",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "spacetrack-ham",
+    "payload": "",
+    "payloadType": "date",
+    "x": 220,
+    "y": 400,
+    "wires": [
+      [
+        "baab1a64f14aa4ca"
+      ]
+    ]
+  },
+  {
+    "id": "baab1a64f14aa4ca",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Clear breaker",
+    "func": "var sourceName = msg.topic;\nif (!sourceName) { node.warn('Set the inject node\\'s Topic field to the sourceName to reset'); return null; }\nflow.set('circuitBreaker_' + sourceName, { open: false, failCount: 0, openedAt: 0 });\nnode.warn('Circuit breaker manually cleared for: ' + sourceName);\nnode.status({ fill: 'green', shape: 'dot', text: sourceName + ': manually cleared' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 520,
+    "y": 400,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "3cf694731fa2e743",
+    "type": "inject",
+    "z": "0d1b7df99b9064e7",
+    "name": "Propagate + emit (every 30s)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "30",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "25",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 190,
+    "y": 500,
+    "wires": [
+      [
+        "0968ea9f92f38e46"
+      ]
+    ]
+  },
+  {
+    "id": "0968ea9f92f38e46",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Propagate (SGP4) + build CoT",
+    "func": "var staleSeconds = 120;\n\nvar FRIENDLY = ['US','UK','FR','GERMANY','GER','IT','CANADA','CA',\n    'SPAIN','NETH','NETHERLANDS','BEL','NORWAY','DEN','POLAND','TURK',\n    'PORTUGAL','GREECE','CZCH','ROMANIA','HUNGARY','SVK','HRV','JPN','JAPAN','AUS','AUSTRALIA',\n    'ROK','SKOR','SKOREA','NZ','ESA','EUME','ISRA','MEX','RP','JOR','THAI','SAUD','SWTZ','IND','ARGN','INDO','MALA','BRAZ','SAFR','ISS','AB'];\nvar HOSTILE = ['CIS','RUSSIA','SU','PRC','CHN','CHINA','PRK','NKOR','NORTH KOREA','CUBA','VTNM','VIETNAM','LAOS'];\n\nvar sats = flow.get('ham_sats') || [];\nif (!sats.length) {\n    node.status({ fill: 'grey', shape: 'ring', text: 'waiting for first Space-Track refresh' });\n    return null;\n}\n\nvar now = new Date();\nvar startIso = now.toISOString();\nvar staleIso = new Date(now.getTime() + staleSeconds * 1000).toISOString();\nvar gmst = satellite.gstime(now);\n\nvar msgs = []; var errors = 0; var staleTle = 0;\n// Skip satellites whose element set is older than this: they are dead / re-entered\n// (Space-Track stops updating them) and propagate to wrong positions or fail.\nvar MAX_TLE_AGE_DAYS = 30;\nsats.forEach(function (s) {\n    try {\n        var satrec = satellite.twoline2satrec(s.line1, s.line2);\n        var epochMs = (satrec.jdsatepoch + (satrec.jdsatepochF || 0) - 2440587.5) * 86400000;\n        if (!isFinite(epochMs) || (now.getTime() - epochMs) > MAX_TLE_AGE_DAYS * 86400000) { staleTle++; return; }\n        var pv = satellite.propagate(satrec, now);\n        if (!pv || !pv.position) { errors++; return; }\n        var geo = satellite.eciToGeodetic(pv.position, gmst);\n        var lat = satellite.degreesLat(geo.latitude);\n        var lon = satellite.degreesLong(geo.longitude);\n        var altKm = geo.height;\n\n        var cc = (s.country || 'UNKNOWN').toUpperCase();\n        var aff = 'n';\n        if (FRIENDLY.indexOf(cc) !== -1) { aff = 'f'; }\n        else if (HOSTILE.indexOf(cc) !== -1) { aff = 'h'; }\n\n        var funcLetter = 'S';\n        var cotExt = '-comms';\n        var affLetter = (aff === 'f') ? 'F' : (aff === 'h') ? 'H' : (aff === 'n') ? 'N' : 'U';\n        var cotType = 'a-' + aff + '-P-' + funcLetter + cotExt;\n        var sidc = 'S' + affLetter + 'P*' + funcLetter + '-----*****';\n        var uid = 'sat-' + s.noradId;\n        var radio = (flow.get('ham_radio') || {})[s.noradId];\n        var remarks = 'NORAD ' + s.noradId + ' | Owner: ' + cc + ' | Alt: ' + altKm.toFixed(1) + ' km | Name: ' + s.name +\n            (radio ? ' | Radio: ' + radio : '');\n\n        var cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n            '<event version=\"2.0\" uid=\"' + uid + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n            'time=\"' + startIso + '\" start=\"' + startIso + '\" stale=\"' + staleIso + '\">' +\n            '<point lat=\"' + lat.toFixed(6) + '\" lon=\"' + lon.toFixed(6) + '\" hae=\"' + (altKm * 1000).toFixed(0) + '\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n            '<detail>' +\n            '<contact callsign=\"' + s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '\"/>' +\n            '<remarks>' + remarks.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</remarks>' +\n            '<milsym id=\"' + sidc + '\"/>' +\n            '<milicon id=\"' + sidc + '\"/>' +\n            '</detail>' +\n            '</event>';\n\n        msgs.push({ payload: cot });\n    } catch (e) { errors++; }\n});\n\nnode.status({ fill: 'green', shape: 'dot', text: msgs.length + ' sats emitted' + (staleTle ? (', ' + staleTle + ' skipped (TLE > ' + MAX_TLE_AGE_DAYS + 'd old)') : '') + (errors ? (', ' + errors + ' errors') : '') });\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [
+      {
+        "var": "satellite",
+        "module": "satellite.js"
+      }
+    ],
+    "x": 530,
+    "y": 500,
+    "wires": [
+      [
+        "c474b45f76bf096d",
+        "aa50f5129e94d0d4"
+      ]
+    ]
+  },
+  {
+    "id": "c474b45f76bf096d",
+    "type": "debug",
+    "z": "0d1b7df99b9064e7",
+    "name": "CoT out (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 840,
+    "y": 560,
+    "wires": []
+  },
+  {
+    "id": "35f99f564534ece0",
+    "type": "inject",
+    "z": "0d1b7df99b9064e7",
+    "name": "Refresh amateur ID list from SatNOGS (weekly + on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "604800",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "5",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 280,
+    "y": 780,
+    "wires": [
+      [
+        "de65696c6833408a"
+      ]
+    ]
+  },
+  {
+    "id": "de65696c6833408a",
+    "type": "http request",
+    "z": "0d1b7df99b9064e7",
+    "name": "GET SatNOGS DB (alive satellites)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://db.satnogs.org/api/transmitters/?status=active&format=json",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 670,
+    "y": 780,
+    "wires": [
+      [
+        "1aa6c0985e823771"
+      ]
+    ]
+  },
+  {
+    "id": "1aa6c0985e823771",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Parse SatNOGS -> NORAD ID list",
+    "func": "// Amateur Satellite Service allocations (ITU/IARU coordinated), not just\n// 2m/70cm -- widened 2026-08-30 after the narrower filter was cutting out\n// real ham satellites that use other coordinated sub-bands.\nvar BANDS = [\n    [29300000, 29510000],     // 10m\n    [144000000, 148000000],   // 2m\n    [420000000, 450000000],   // 70cm\n    [1260000000, 1300000000], // 23cm\n    [2400000000, 2450000000]  // 13cm\n];\n\nfunction inBand(freqHz) {\n    if (!freqHz) return false;\n    return BANDS.some(function (b) { return freqHz >= b[0] && freqHz <= b[1]; });\n}\n\nvar arr = Array.isArray(msg.payload) ? msg.payload : [];\nvar idSet = {};\nvar radioMap = {};\narr.forEach(function (t) {\n    if (!t || !t.norad_cat_id) return;\n    if (t.status !== 'active') return;\n    if (!inBand(t.downlink_low)) return;\n\n    idSet[t.norad_cat_id] = true;\n\n    if (!radioMap[t.norad_cat_id]) {\n        var downlink = t.downlink_low ? (t.downlink_low / 1e6).toFixed(3) + ' MHz' : null;\n        var uplink = t.uplink_low ? (t.uplink_low / 1e6).toFixed(3) + ' MHz' : null;\n        var mode = t.mode || '';\n        var parts = [];\n        if (downlink) parts.push('RX/Downlink ' + downlink + (mode ? ' ' + mode : ''));\n        if (uplink) parts.push('TX/Uplink ' + uplink + (mode ? ' ' + mode : ''));\n        radioMap[t.norad_cat_id] = parts.join(' | ');\n    }\n});\nvar ids = Object.keys(idSet).map(function (s) { return parseInt(s, 10); });\n\nflow.set('ham_amateur_ids', ids);\nflow.set('ham_radio', radioMap);\nnode.status({ fill: 'blue', shape: 'dot', text: ids.length + ' amateur IDs (active TX, widened bands)' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 980,
+    "y": 780,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "9adb88e7fe5e9928",
+    "type": "catch",
+    "z": "0d1b7df99b9064e7",
+    "name": "Catch Check Response errors",
+    "scope": [
+      "ham_checkresp"
+    ],
+    "uncaught": false,
+    "x": 160,
+    "y": 620,
+    "wires": [
+      [
+        "78bb2f568049d72c"
+      ]
+    ]
+  },
+  {
+    "id": "78bb2f568049d72c",
+    "type": "debug",
+    "z": "0d1b7df99b9064e7",
+    "name": "PERSISTENT error log",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 610,
+    "y": 620,
+    "wires": []
+  },
+  {
+    "id": "540d133b56794aa1",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Build Login Request",
+    "func": "var user = env.get('SPACETRACK_USER');\nvar pass = env.get('SPACETRACK_PASS');\nif (!user || !pass) {\n    node.status({ fill: 'red', shape: 'ring', text: 'Set SPACETRACK_USER/PASS in tab env vars' });\n    return null;\n}\nmsg.payload = 'identity=' + encodeURIComponent(user) + '&password=' + encodeURIComponent(pass);\nmsg.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 180,
+    "y": 120,
+    "wires": [
+      [
+        "a8b273823f04c00f"
+      ]
+    ]
+  },
+  {
+    "id": "a8b273823f04c00f",
+    "type": "http request",
+    "z": "0d1b7df99b9064e7",
+    "name": "POST Login to Space-Track",
+    "method": "POST",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://www.space-track.org/ajaxauth/login",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 500,
+    "y": 120,
+    "wires": [
+      [
+        "2a59df2856d90a83"
+      ]
+    ]
+  },
+  {
+    "id": "2a59df2856d90a83",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Extract Session Cookie",
+    "func": "// Space-Track's combined login+query single-command mode is deprecated\n// (confirmed 2026-08-30 via the actual response body: \"Single command\n// deprecated. See API help for cookie use.\"). Back to the documented\n// two-step flow: POST identity+password to /ajaxauth/login, capture the\n// session cookie from Set-Cookie, then send that cookie on the real query.\nvar setCookie = msg.headers && msg.headers['set-cookie'];\nif (!setCookie || !setCookie.length) {\n    node.status({ fill: 'red', shape: 'ring', text: 'login failed -- no Set-Cookie received' });\n    node.error('Space-Track login: no Set-Cookie header in response (check SPACETRACK_USER/PASS)', msg);\n    return null;\n}\nvar cookieHeader = setCookie.map(function (c) { return c.split(';')[0]; }).join('; ');\nflow.set('spacetrack_session_cookie', cookieHeader);\nnode.status({ fill: 'green', shape: 'dot', text: 'session cookie captured' });\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 850,
+    "y": 120,
+    "wires": [
+      [
+        "1c08438a5f4aa73d"
+      ]
+    ]
+  },
+  {
+    "id": "aa50f5129e94d0d4",
+    "type": "tcp out",
+    "z": "0d1b7df99b9064e7",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "f3ac48c8a86cec45",
+    "x": 1070,
+    "y": 480,
+    "wires": []
+  },
+  {
+    "id": "27c64504c4313698",
+    "type": "tcp out",
+    "z": "0d1b7df99b9064e7",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "f3ac48c8a86cec45",
+    "x": 1070,
+    "y": 300,
+    "wires": []
+  },
+  {
+    "id": "ed845bf01a85a351",
+    "type": "http in",
+    "z": "0d1b7df99b9064e7",
+    "name": "GET /debug/ham-last-error",
+    "url": "/debug/ham-last-error",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 310,
+    "y": 700,
+    "wires": [
+      [
+        "2c3ed937826afe8c"
+      ]
+    ]
+  },
+  {
+    "id": "2c3ed937826afe8c",
+    "type": "function",
+    "z": "0d1b7df99b9064e7",
+    "name": "Build debug response",
+    "func": "var body = flow.get('ham_last_error_body');\nvar breaker = flow.get('circuitBreaker_spacetrack-ham') || {};\nmsg.payload = JSON.stringify({\n    breaker_open: !!breaker.open,\n    breaker_last_error_code: (breaker.lastError && breaker.lastError.code) || null,\n    breaker_last_error_at: (breaker.lastError && breaker.lastError.at) || null,\n    last_error_body: body === undefined ? 'none captured yet' : body\n}, null, 2);\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 570,
+    "y": 700,
+    "wires": [
+      [
+        "a763df120c61d064"
+      ]
+    ]
+  },
+  {
+    "id": "a763df120c61d064",
+    "type": "http response",
+    "z": "0d1b7df99b9064e7",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 810,
+    "y": 700,
+    "wires": []
+  },
+  {
+    "id": "f3ac48c8a86cec45",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

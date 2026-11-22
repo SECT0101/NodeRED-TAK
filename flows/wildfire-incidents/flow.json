@@ -1,0 +1,233 @@
+[
+  {
+    "id": "f4d2ab2d48dbf74c",
+    "type": "tab",
+    "label": "Wildfire Incidents & Perimeters → TAK",
+    "disabled": false,
+    "info": "Current wildfire incidents and their mapped fire perimeters. Fires that leave the feed are removed from the map.\n\nData: Esri USA Wildfires (NIFC data) (https://www.arcgis.com/home/item.html?id=d957997ccee7408287a963600a77f61f). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/wildfire-incidents",
+    "env": []
+  },
+  {
+    "id": "setup2d48dbf74c",
+    "type": "comment",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "SETUP - read me (double-click)",
+    "info": "Current wildfire incidents and their mapped fire perimeters. Fires that leave the feed are removed from the map.\n\nData: Esri USA Wildfires (NIFC data) (https://www.arcgis.com/home/item.html?id=d957997ccee7408287a963600a77f61f). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/wildfire-incidents",
+    "x": 190,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "wf_timer",
+    "type": "inject",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "UPDATE WILDFIRES",
+    "props": [],
+    "repeat": "900",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "2",
+    "topic": "",
+    "x": 150,
+    "y": 220,
+    "wires": [
+      [
+        "incident_config",
+        "perimeter_config"
+      ]
+    ]
+  },
+  {
+    "id": "incident_config",
+    "type": "change",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "GET ALL INCIDENTS",
+    "rules": [
+      {
+        "t": "set",
+        "p": "url",
+        "pt": "msg",
+        "to": "https://services9.arcgis.com/RHVPKKiFTONKtxq3/ArcGIS/rest/services/USA_Wildfires_v1/FeatureServer/0/query",
+        "tot": "str"
+      },
+      {
+        "t": "set",
+        "p": "payload",
+        "pt": "msg",
+        "to": "{     \"where\": \"1=1\",     \"outFields\": \"*\",     \"returnGeometry\": true,     \"outSR\": 4326,     \"geometry\": \"-94.5,24.5,-75.5,39.5\",     \"geometryType\": \"esriGeometryEnvelope\",     \"spatialRel\": \"esriSpatialRelIntersects\",     \"inSR\": 4326,     \"f\": \"json\" }",
+        "tot": "json"
+      }
+    ],
+    "x": 390,
+    "y": 160,
+    "wires": [
+      [
+        "incident_http"
+      ]
+    ]
+  },
+  {
+    "id": "incident_http",
+    "type": "http request",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "ArcGIS INCIDENTS",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "query",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": true,
+    "headers": [],
+    "x": 630,
+    "y": 160,
+    "wires": [
+      [
+        "incident_cot"
+      ]
+    ]
+  },
+  {
+    "id": "incident_cot",
+    "type": "function",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "FIRE ICONS + AUTO DELETE",
+    "func": "const data = msg.payload;\n\n/* Never delete anything if ArcGIS did not give us a valid feature list. */\nif (!data || !Array.isArray(data.features)) {\n    node.error(\"No valid incident features returned from ArcGIS - NOT deleting existing fires\");\n    return null;\n}\n\nconst previous = context.get(\"incidentUids\") || {};\nconst current = {};\n\nlet sent = 0;\nlet deleted = 0;\n\nnode.status({fill:\"green\",shape:\"dot\",text:data.features.length + \" incidents\"});\n\nfor (const f of data.features) {\n\n    if (!f.geometry) continue;\n\n    const lat = Number(f.geometry.y);\n    const lon = Number(f.geometry.x);\n    const a = f.attributes || {};\n\n    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;\n\n    const name = String(a.IncidentName || \"Wildfire\");\n\n    const id = String(\n        a.UniqueFireIdentifier ||\n        a.IrwinID ||\n        a.GlobalID ||\n        a.OBJECTID ||\n        name\n    ).replace(/[^A-Za-z0-9_.:-]/g,\"_\");\n\n    const uid = \"ArcGIS.Wildfire.\" + id;\n\n    current[uid] = true;\n\n    const now = new Date();\n    const time = now.toISOString();\n    const stale = new Date(now.getTime() + 15 * 60 * 1000).toISOString();\n\n    const remarks = [\n        \"Incident: \" + name,\n        \"Daily Acres: \" + value(a.DailyAcres),\n        \"Calculated Acres: \" + value(a.CalculatedAcres),\n        \"Percent Contained: \" + value(a.PercentContained),\n        \"County: \" + value(a.POOCounty),\n        \"State: \" + value(a.POOState),\n        \"Cause: \" + value(a.FireCause),\n        \"Personnel: \" + value(a.TotalIncidentPersonnel),\n        \"Discovery: \" + value(a.FireDiscoveryDateTime)\n    ].join(\" | \");\n\n    const cot =\n`<?xml version=\"1.0\" standalone=\"yes\"?>\n<event version=\"2.0\" uid=\"${xml(uid)}\" type=\"a-.-X-i-f-w\" how=\"m-g\" time=\"${time}\" start=\"${time}\" stale=\"${stale}\">\n<point lat=\"${lat}\" lon=\"${lon}\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/>\n<detail>\n<contact callsign=\"${xml(name)}\"/>\n<remarks>${xml(remarks)}</remarks>\n</detail>\n</event>`;\n\n    node.send({payload:cot});\n    sent++;\n}\n\n/*\n * DELETE INCIDENTS THAT DISAPPEARED FROM ARCGIS\n */\nfor (const uid of Object.keys(previous)) {\n\n    if (current[uid]) continue;\n\n    const now = new Date();\n    const time = now.toISOString();\n\n    const deleteCot =\n`<?xml version=\"1.0\" standalone=\"yes\"?>\n<event version=\"2.0\" uid=\"${xml(uid + \".delete\")}\" type=\"t-x-d-d\" how=\"m-g\" time=\"${time}\" start=\"${time}\" stale=\"${new Date(Date.now() + 2 * 60 * 1000).toISOString()}\">\n<point lat=\"0\" lon=\"0\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/>\n<detail>\n<link uid=\"${xml(uid)}\" type=\"none\" relation=\"none\"/>\n<__forcedelete/>\n</detail>\n</event>`;\n\n    node.send({payload:deleteCot});\n    deleted++;\n}\n\ncontext.set(\"incidentUids\", current);\n\nnode.status({\n    fill:\"green\",\n    shape:\"dot\",\n    text:`${sent} current / ${deleted} deleted`\n});\n\nif (deleted > 0) {\n    node.warn(`Removed ${deleted} wildfire incident(s) no longer in ArcGIS`);\n}\n\nreturn null;\n\nfunction value(v) {\n    return v === null || v === undefined || v === \"\" ? \"N/A\" : String(v);\n}\n\nfunction xml(v) {\n    return String(v)\n        .replace(/&/g,\"&amp;\")\n        .replace(/</g,\"&lt;\")\n        .replace(/>/g,\"&gt;\")\n        .replace(/\"/g,\"&quot;\")\n        .replace(/'/g,\"&apos;\");\n}",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 890,
+    "y": 160,
+    "wires": [
+      [
+        "debug_cot",
+        "83c693bca0c1366b"
+      ]
+    ]
+  },
+  {
+    "id": "perimeter_config",
+    "type": "change",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "GET ALL FIRE PERIMETERS",
+    "rules": [
+      {
+        "t": "set",
+        "p": "url",
+        "pt": "msg",
+        "to": "https://services9.arcgis.com/RHVPKKiFTONKtxq3/ArcGIS/rest/services/USA_Wildfires_v1/FeatureServer/1/query",
+        "tot": "str"
+      },
+      {
+        "t": "set",
+        "p": "msg.payload",
+        "pt": "msg",
+        "to": "{     \"where\": \"1=1\",     \"outFields\": \"*\",     \"returnGeometry\": true,     \"outSR\": 4326,     \"geometry\": \"-94.5,24.5,-75.5,39.5\",     \"geometryType\": \"esriGeometryEnvelope\",     \"spatialRel\": \"esriSpatialRelIntersects\",     \"inSR\": 4326,     \"f\": \"json\" }",
+        "tot": "json"
+      }
+    ],
+    "x": 410,
+    "y": 340,
+    "wires": [
+      [
+        "perimeter_http"
+      ]
+    ]
+  },
+  {
+    "id": "perimeter_http",
+    "type": "http request",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "ArcGIS FIRE PERIMETERS",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "query",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": true,
+    "headers": [],
+    "x": 670,
+    "y": 340,
+    "wires": [
+      [
+        "perimeter_cot"
+      ]
+    ]
+  },
+  {
+    "id": "perimeter_cot",
+    "type": "function",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "FIRE LINES + AUTO DELETE",
+    "func": "const data = msg.payload;\n\n/* Never delete existing lines if ArcGIS did not return valid data. */\nif (!data || !Array.isArray(data.features)) {\n    node.error(\"No valid perimeter features returned from ArcGIS - NOT deleting existing perimeters\");\n    return null;\n}\n\nconst previous = context.get(\"perimeterUids\") || {};\nconst current = {};\nconst perIncident = {}; // count perimeter features per incident this poll\n\nlet features = 0;\nlet rings = 0;\nlet vertices = 0;\nlet sent = 0;\nlet deleted = 0;\n\nfor (const f of data.features) {\n\n    const a = f.attributes || {};\n    const g = f.geometry;\n\n    if (!g || !Array.isArray(g.rings)) continue;\n\n    /* Only actual wildfire perimeters. */\n    const category = String(a.FeatureCategory || \"\");\n\n    if (\n        category !== \"Wildfire Daily Fire Perimeter\" &&\n        category !== \"\"\n    ) {\n        continue;\n    }\n\n    features++;\n\n    const name = String(a.IncidentName || \"Wildfire Perimeter\");\n\n    // IRWINID is the permanent incident ID; GeometryID changes every time the\n    // perimeter is re-mapped, which made TAK stack a new copy each update.\n    const perimeterBase = String(\n        a.IRWINID ||\n        a.GeometryID ||\n        a.GlobalID ||\n        a.OBJECTID ||\n        name\n    ).replace(/[^A-Za-z0-9_.:-]/g,\"_\");\n    perIncident[perimeterBase] = (perIncident[perimeterBase] || 0) + 1;\n    const perimeterId = perimeterBase + (perIncident[perimeterBase] > 1 ? \".P\" + perIncident[perimeterBase] : \"\");\n\n    for (let r = 0; r < g.rings.length; r++) {\n\n        const ring = g.rings[r];\n\n        if (!Array.isArray(ring) || ring.length < 3) continue;\n\n        const uid =\n            `ArcGIS.Wildfire.Perimeter.${perimeterId}.R${r}`;\n\n        current[uid] = true;\n        rings++;\n\n        const points = [];\n        let centerLat = 0;\n        let centerLon = 0;\n        let count = 0;\n\n        for (const xy of ring) {\n\n            if (!Array.isArray(xy) || xy.length < 2) continue;\n\n            const lon = Number(xy[0]);\n            const lat = Number(xy[1]);\n\n            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;\n\n            points.push(`${lat},${lon},0`);\n\n            centerLat += lat;\n            centerLon += lon;\n            count++;\n        }\n\n        if (count < 3) continue;\n\n        centerLat /= count;\n        centerLon /= count;\n\n        /* Close the ring if necessary. */\n        const first = ring[0];\n        const last = ring[ring.length - 1];\n\n        if (Array.isArray(first) && Array.isArray(last)) {\n\n            const flon = Number(first[0]);\n            const flat = Number(first[1]);\n            const llon = Number(last[0]);\n            const llat = Number(last[1]);\n\n            if (\n                Number.isFinite(flat) &&\n                Number.isFinite(flon) &&\n                (flat !== llat || flon !== llon)\n            ) {\n                points.push(`${flat},${flon},0`);\n            }\n        }\n\n        vertices += points.length;\n\n        const now = new Date();\n        const time = now.toISOString();\n        const stale = new Date(now.getTime() + 15 * 60 * 1000).toISOString();\n\n        const links = points.map(p =>\n            `<link point=\"${p}\"/>`\n        ).join(\"\\n\");\n\n        const remarks = [\n            \"Incident: \" + value(a.IncidentName),\n            \"GIS Acres: \" + value(a.GISAcres),\n            \"Category: \" + value(a.FeatureCategory),\n            \"Map Method: \" + value(a.MapMethod),\n            \"Geometry ID: \" + value(a.GeometryID),\n            \"Polygon Date: \" + value(a.PolygonDateTime),\n            \"Current Date: \" + value(a.DateCurrent)\n        ].join(\" | \");\n\n        const cot =\n`<?xml version=\"1.0\" standalone=\"yes\"?>\n<event version=\"2.0\" uid=\"${xml(uid)}\" type=\"u-d-f\" how=\"m-g\" time=\"${time}\" start=\"${time}\" stale=\"${stale}\">\n<point lat=\"${centerLat}\" lon=\"${centerLon}\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/>\n<detail>\n${links}\n<strokeColor value=\"-65536\"/>\n<strokeWeight value=\"4.0\"/>\n<fillColor value=\"1073741824\"/>\n<contact callsign=\"${xml(name + \" Perimeter\")}\"/>\n<remarks>${xml(remarks)}</remarks>\n</detail>\n</event>`;\n\n        node.send({payload:cot});\n        sent++;\n    }\n}\n\n/*\n * DELETE PERIMETER RINGS THAT NO LONGER EXIST IN ARCGIS\n */\nfor (const uid of Object.keys(previous)) {\n\n    if (current[uid]) continue;\n\n    const now = new Date();\n    const time = now.toISOString();\n\n    const deleteCot =\n`<?xml version=\"1.0\" standalone=\"yes\"?>\n<event version=\"2.0\" uid=\"${xml(uid + \".delete\")}\" type=\"t-x-d-d\" how=\"m-g\" time=\"${time}\" start=\"${time}\" stale=\"${new Date(Date.now() + 2 * 60 * 1000).toISOString()}\">\n<point lat=\"0\" lon=\"0\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/>\n<detail>\n<link uid=\"${xml(uid)}\" type=\"none\" relation=\"none\"/>\n<__forcedelete/>\n</detail>\n</event>`;\n\n    node.send({payload:deleteCot});\n    deleted++;\n}\n\ncontext.set(\"perimeterUids\", current);\n\nnode.status({\n    fill:\"green\",\n    shape:\"dot\",\n    text:`${sent} lines / ${vertices} vertices / ${deleted} deleted`\n});\n\nnode.warn(\n    `FIRE PERIMETERS: ${features} features, ${rings} rings, ${vertices} vertices, ${sent} sent, ${deleted} deleted`\n);\n\nreturn null;\n\nfunction value(v) {\n    return v === null || v === undefined || v === \"\" ? \"N/A\" : String(v);\n}\n\nfunction xml(v) {\n    return String(v)\n        .replace(/&/g,\"&amp;\")\n        .replace(/</g,\"&lt;\")\n        .replace(/>/g,\"&gt;\")\n        .replace(/\"/g,\"&quot;\")\n        .replace(/'/g,\"&apos;\");\n}",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 950,
+    "y": 340,
+    "wires": [
+      [
+        "debug_cot",
+        "83c693bca0c1366b"
+      ]
+    ]
+  },
+  {
+    "id": "debug_cot",
+    "type": "debug",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "TAK CoT Debug",
+    "active": false,
+    "tosidebar": true,
+    "tostatus": true,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 840,
+    "y": 260,
+    "wires": []
+  },
+  {
+    "id": "83c693bca0c1366b",
+    "type": "tcp out",
+    "z": "f4d2ab2d48dbf74c",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "594e0bc7adcaa24a",
+    "x": 1100,
+    "y": 240,
+    "wires": []
+  },
+  {
+    "id": "594e0bc7adcaa24a",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

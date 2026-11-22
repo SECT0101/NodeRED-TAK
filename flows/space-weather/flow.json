@@ -1,0 +1,237 @@
+[
+  {
+    "id": "swpc_tab",
+    "type": "tab",
+    "label": "Space Weather → TAK",
+    "disabled": false,
+    "info": "One status marker colored by the current geomagnetic storm level (NOAA G-scale from the Kp index), with active space weather alerts in the remarks. Handy for judging HF conditions.\n\nData: NOAA Space Weather Prediction Center (https://www.swpc.noaa.gov/). Updates every 5 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. The marker's position is set at the top of the Build status CoT function.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/space-weather",
+    "env": []
+  },
+  {
+    "id": "setupswpc_tab",
+    "type": "comment",
+    "z": "swpc_tab",
+    "name": "SETUP - read me (double-click)",
+    "info": "One status marker colored by the current geomagnetic storm level (NOAA G-scale from the Kp index), with active space weather alerts in the remarks. Handy for judging HF conditions.\n\nData: NOAA Space Weather Prediction Center (https://www.swpc.noaa.gov/). Updates every 5 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. The marker's position is set at the top of the Build status CoT function.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/space-weather",
+    "x": 230,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "swpc_inject",
+    "type": "inject",
+    "z": "swpc_tab",
+    "name": "Every 5 min (+ on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "300",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "3",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 190,
+    "y": 100,
+    "wires": [
+      [
+        "swpc_http_kp",
+        "swpc_http_alerts",
+        "2056791ce4c1589f"
+      ]
+    ]
+  },
+  {
+    "id": "swpc_http_kp",
+    "type": "http request",
+    "z": "swpc_tab",
+    "name": "GET noaa-planetary-k-index.json",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 480,
+    "y": 60,
+    "wires": [
+      [
+        "swpc_cache_kp",
+        "08e37f2a4bb4a78f"
+      ]
+    ]
+  },
+  {
+    "id": "swpc_cache_kp",
+    "type": "function",
+    "z": "swpc_tab",
+    "name": "Cache Kp + build",
+    "func": "flow.set('swpcKp', msg.payload);\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 750,
+    "y": 60,
+    "wires": [
+      [
+        "swpc_cot"
+      ]
+    ]
+  },
+  {
+    "id": "swpc_http_alerts",
+    "type": "http request",
+    "z": "swpc_tab",
+    "name": "GET alerts.json",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://services.swpc.noaa.gov/products/alerts.json",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 420,
+    "y": 160,
+    "wires": [
+      [
+        "swpc_cache_alerts"
+      ]
+    ]
+  },
+  {
+    "id": "swpc_cache_alerts",
+    "type": "function",
+    "z": "swpc_tab",
+    "name": "Cache alerts + build",
+    "func": "flow.set('swpcAlerts', msg.payload);\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 740,
+    "y": 160,
+    "wires": [
+      [
+        "swpc_cot"
+      ]
+    ]
+  },
+  {
+    "id": "swpc_cot",
+    "type": "function",
+    "z": "swpc_tab",
+    "name": "Build status CoT (reads both caches)",
+    "func": "// ---- config -----------------------------------------------------------\nvar markers = [\n    { name: 'Nashville',    lat: 36.1627, lon: -86.7816 },\n    { name: 'Knoxville',    lat: 35.9606, lon: -83.9207 },\n    { name: 'Memphis',      lat: 35.1495, lon: -90.0490 },\n    { name: 'Chattanooga',  lat: 35.0456, lon: -85.3097 }\n];\n\nvar cotType = 'b-m-p-s-m';\nvar channelName = 'NWS';\nvar staleMinutes = 6;\n// -------------------------------------------------------------------------\n\nfunction esc(s) {\n    return String(s == null ? '' : s)\n        .replace(/&/g, '&amp;').replace(/</g, '&lt;')\n        .replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n}\n\nfunction kpToGScale(kp) {\n    if (kp >= 9) return 5;\n    if (kp >= 8) return 4;\n    if (kp >= 7) return 3;\n    if (kp >= 6) return 2;\n    if (kp >= 5) return 1;\n    return 0;\n}\n\nvar GSCALE_COLOR = {\n    0: -16711936, 1: -256, 2: -23296, 3: -23296, 4: -65536, 5: -65536\n};\n\nvar kpData = flow.get('swpcKp');\nvar alertsData = flow.get('swpcAlerts');\n\nvar latestKp = null;\nif (Array.isArray(kpData) && kpData.length) {\n    var lastRow = kpData[kpData.length - 1];\n    latestKp = parseFloat(lastRow.Kp);\n}\n\nvar gScale = (latestKp !== null && !isNaN(latestKp)) ? kpToGScale(latestKp) : 0;\nvar colorValue = GSCALE_COLOR[gScale];\n\nvar remarksParts = ['Space Weather Status'];\nremarksParts.push(latestKp !== null ? ('Kp index: ' + latestKp + ' (G' + gScale + (gScale ? '' : ' - quiet') + ')') : 'Kp index: unavailable');\n\nif (Array.isArray(alertsData) && alertsData.length) {\n    var recent = alertsData.slice(-3).reverse();\n    recent.forEach(function (a) {\n        var msgText = a.message || a.Message || '';\n        var lines = String(msgText).split('\\n');\n\n        var codeLine = lines.find(function (l) { return l.indexOf('Space Weather Message Code:') !== -1; });\n        var code = codeLine ? codeLine.replace('Space Weather Message Code:', '').trim() : (a.product_id || 'UNKNOWN');\n\n        var descLine = lines.find(function (l) {\n            return /^(WARNING|WATCH|ALERT|SUMMARY|EXTENDED WARNING|CONTINUED ALERT|CANCEL)/.test(l.trim());\n        });\n        var desc = descLine ? descLine.trim() : 'No description available';\n\n        remarksParts.push(code + ': ' + desc);\n    });\n}\n\nvar remarks = esc(remarksParts.join(' | '));\n\nvar now = new Date();\nvar start = now.toISOString();\nvar stale = new Date(now.getTime() + staleMinutes * 60000).toISOString();\n\nvar msgs = markers.map(function (m) {\n    var uid = 'swpc-space-weather-status-' + m.name.toLowerCase();\n    var cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n        '<event version=\"2.0\" uid=\"' + uid + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n        'time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' +\n        '<point lat=\"' + m.lat + '\" lon=\"' + m.lon + '\" hae=\"0\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n        '<detail>' +\n        '<contact callsign=\"Space Weather (' + esc(m.name) + ')\"/>' +\n        '<color value=\"' + colorValue + '\"/>' +\n        '<remarks>' + remarks + '</remarks>' +\n        '<marti><dest name=\"' + esc(channelName) + '\"/></marti>' +\n        '</detail>' +\n        '</event>';\n    return { payload: cot };\n});\n\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1050,
+    "y": 100,
+    "wires": [
+      [
+        "swpc_debug",
+        "690ddcd61128e8f4"
+      ]
+    ]
+  },
+  {
+    "id": "swpc_debug",
+    "type": "debug",
+    "z": "swpc_tab",
+    "name": "CoT out (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1320,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "690ddcd61128e8f4",
+    "type": "tcp out",
+    "z": "swpc_tab",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "363345e1d7d849f7",
+    "x": 1350,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "08e37f2a4bb4a78f",
+    "type": "debug",
+    "z": "swpc_tab",
+    "name": "debug 15",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 720,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "2056791ce4c1589f",
+    "type": "debug",
+    "z": "swpc_tab",
+    "name": "debug 13",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 500,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "363345e1d7d849f7",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

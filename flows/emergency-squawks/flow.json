@@ -1,0 +1,364 @@
+[
+  {
+    "id": "41d28c4710c1bc34",
+    "type": "tab",
+    "label": "Emergency & Wildfire Squawks → TAK",
+    "disabled": false,
+    "info": "Aircraft squawking 7500 (hijack), 7600 (lost comms), 7700 (emergency) or 1255 (firefighting) over Tennessee (plus a small buffer).\n\nData: adsb.fi open data API (https://github.com/adsbfi/opendata). Updates every 17 seconds.\n\nNeeds: [node-red-contrib-tak](https://flows.nodered.org/node/node-red-contrib-tak) (Manage palette > Install).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/emergency-squawks",
+    "env": []
+  },
+  {
+    "id": "setup4710c1bc34",
+    "type": "comment",
+    "z": "41d28c4710c1bc34",
+    "name": "SETUP - read me (double-click)",
+    "info": "Aircraft squawking 7500 (hijack), 7600 (lost comms), 7700 (emergency) or 1255 (firefighting) over Tennessee (plus a small buffer).\n\nData: adsb.fi open data API (https://github.com/adsbfi/opendata). Updates every 17 seconds.\n\nNeeds: [node-red-contrib-tak](https://flows.nodered.org/node/node-red-contrib-tak) (Manage palette > Install).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/emergency-squawks",
+    "x": 170,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "3807917ecea5bddf",
+    "type": "http request",
+    "z": "41d28c4710c1bc34",
+    "name": "Hijack Squak",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://opendata.adsb.fi/api/v2/sqk/7500",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 370,
+    "y": 240,
+    "wires": [
+      [
+        "41d1aa7f3ed823af",
+        "f02d3a8cba391cfa"
+      ]
+    ]
+  },
+  {
+    "id": "342fe6c3d48191a1",
+    "type": "http request",
+    "z": "41d28c4710c1bc34",
+    "name": "Lost comms squak",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://opendata.adsb.fi/api/v2/sqk/7600",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 370,
+    "y": 320,
+    "wires": [
+      [
+        "41d1aa7f3ed823af",
+        "f02d3a8cba391cfa"
+      ]
+    ]
+  },
+  {
+    "id": "41d1aa7f3ed823af",
+    "type": "split",
+    "z": "41d28c4710c1bc34",
+    "name": "",
+    "splt": "\\n",
+    "spltType": "str",
+    "arraySplt": 1,
+    "arraySpltType": "len",
+    "stream": true,
+    "addname": "topic",
+    "property": "payload.ac",
+    "x": 730,
+    "y": 280,
+    "wires": [
+      [
+        "c40c555210bd3565"
+      ]
+    ]
+  },
+  {
+    "id": "c40c555210bd3565",
+    "type": "function",
+    "z": "41d28c4710c1bc34",
+    "name": "getEvent",
+    "func": "if (msg.payload.ac.flight && msg.payload.ac.flight.toString().includes(\"TEST\") || msg.payload.ac.flight.toString().includes(\"GAFTT\")) {\n    return null;  // Drop the message\n}\nconst time = new Date(Date.now()).toISOString();\n//const staleTime = new Date(Date.now() + ((5 * 60 * 1000))).toISOString();\nlet latitude = typeof msg.payload.ac.rr_lat !== 'undefined' ? msg.payload.ac.rr_lat : msg.payload.ac.lat;\nif (latitude == null){\n    latitude = \"0.0\"\n};\nlet longitude = typeof msg.payload.ac.rr_lon !== 'undefined' ? msg.payload.ac.rr_lon : msg.payload.ac.lon;\nif (longitude == null){\n    longitude = \"0.0\"\n};\n\n// Same TN + overlap bounding box used across the other flows. Emergency\n// squawk queries (7500/7600/7700) are global with no server-side geographic\n// filter, so this is applied here client-side instead. Also incidentally\n// drops the \"0.0,0.0\" fallback case above, since Null Island is nowhere\n// near Tennessee.\nconst TN_BBOX = { latMin: 34.3, latMax: 37.2, lonMin: -91.2, lonMax: -82.0 };\nconst latNum = parseFloat(latitude);\nconst lonNum = parseFloat(longitude);\nif (!Number.isFinite(latNum) || !Number.isFinite(lonNum) ||\n    latNum < TN_BBOX.latMin || latNum > TN_BBOX.latMax ||\n    lonNum < TN_BBOX.lonMin || lonNum > TN_BBOX.lonMax) {\n    return null;\n}\n\nlet elevation = typeof msg.payload.ac.alt_geom !== 'undefined' ? msg.payload.ac.alt_geom * 0.3048 : msg.payload.ac.alt_baro;\nconst hexid = msg.payload.ac.hex\nconst reg = msg.payload.ac.r\nconst type = msg.payload.ac.t\nconst desc = msg.payload.ac.desc\nconst ownOp = msg.payload.ac.ownOp\nconst remarks = [\n    \"ID: \" + hexid +\n    \"\\nSquak: \"+ msg.payload.ac.squawk +\n    \"\\nReg: \" + reg +\n    \"\\nType: \"+ type +\n    \"\\nDesc: \"+ desc +\n    \"\\nOperator: \" + ownOp +\n    \"\\nFlight: https://www.flightaware.com/live/flight/\" + msg.payload.ac.flight.trim()\n];\nif (elevation == \"ground\"){\n    elevation = \"0.0\"\n};\nlet hae = elevation;\nconst ce = typeof msg.payload.ac.nac_p !== 'undefined' ? msg.payload.ac.nac_p : '999999';\nconst le = typeof msg.payload.ac.nac_v !== 'undefined' ? msg.payload.ac.nac_v : '999999';\nconst course = typeof msg.payload.ac.track !== 'undefined' ? msg.payload.ac.track : \"0.0\";\nconst speed = typeof msg.payload.ac.gs !== 'undefined' ? msg.payload.ac.gs * 0.514444 : \"0.0\";\nif (hae == \"\" || hae == null) {\n    hae = \"999999\"\n};\nconst nameID = (msg.payload.ac.flight.trim() + \"-\" + (type || hexid)).trim()\nconst category = msg.payload.ac.category;\nlet attitude;\nlet affil;\nif (msg.payload.ac.dbFlags == 1) {\n    attitude = \"f\";\n    affil = \"M\";\n} else {\n    attitude = \"n\";\n    affil = \"C\";\n}\nconst categoryToCoT = {\n    \"1\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"2\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"3\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"4\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"5\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"A1\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"A2\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"A3\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"A4\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"A5\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    //Fixed\n    \"6\": \"a-\" + attitude + \"-A-M-F-F\",\n    \"A6\": \"a-\" + attitude + \"-A-M-F-F\",\n    //Rotary\n    \"7\": \"a-\" + attitude + \"-A-\" + affil + \"-H\",\n    \"A7\": \"a-\" + attitude + \"-A-\" + affil + \"-H\",\n    //Glider\n    \"9\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"B1\": \"a-\" + attitude + \"-A-\" + affil + \"-F\",\n    \"10\": \"a-\" + attitude + \"-A-\" + affil + \"-L\",\n    \"B2\": \"a-\" + attitude + \"-A-\" + affil + \"-L\",\n    \"14\": \"a-\" + attitude + \"-A-M-F-Q\",\n    \"B6\": \"a-\" + attitude + \"-A-M-F-Q\",\n    \"15\": \"a-n-A-C-U\",\n    \"B7\": \"a-n-A-C-U\",\n    \"17\": \"a-\" + attitude + \"-G-E-V-C-U\",\n    \"18\": \"a-\" + attitude + \"-G-E-V-C-U\",\n    \"C1\": \"a-\" + attitude + \"-G-E-V-C-U\",\n    \"C2\": \"a-\" + attitude + \"-G-E-V-C-U\",\n    \"19\": \"a-\" + attitude + \"-G-I-U-T-com-tow\",\n    \"20\": \"a-\" + attitude + \"-G-I-U-T-com-tow\",\n    \"C3\": \"a-\" + attitude + \"-G-I-U-T-com-tow\",\n    \"C4\": \"a-\" + attitude + \"-G-I-U-T-com-tow\"\n}\nconst cotType = categoryToCoT[category] || \"a-\" + attitude + \"-A-\" + affil;\nconst contact = {\n    contact: [\n        nameID.trim(), //Callsign\n        desc,\n        remarks\n    ]\n};\nconst track = {\n    track: [\n        nameID.trim(), //Callsign\n        course,\n        speed\n    ]\n};\nconst event = {\n    event: [\n        time, //Time/StartTime\n        latitude,\n        longitude,\n        hae,\n        ce,\n        le,\n        nameID.trim(), //Callsign\n        cotType\n    ]\n}\n\nreturn [\n    { payload: contact, \n      parts: msg.parts },\n\n    { payload: track,\n      parts: msg.parts },\n      \n    { payload: event,\n      parts: msg.parts }\n];",
+    "outputs": 3,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 900,
+    "y": 280,
+    "wires": [
+      [
+        "90dc90ad830970d6"
+      ],
+      [
+        "90dc90ad830970d6"
+      ],
+      [
+        "90dc90ad830970d6"
+      ]
+    ]
+  },
+  {
+    "id": "f9e8db018972b76b",
+    "type": "inject",
+    "z": "41d28c4710c1bc34",
+    "name": "",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "17",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "15",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 130,
+    "y": 260,
+    "wires": [
+      [
+        "3807917ecea5bddf",
+        "342fe6c3d48191a1",
+        "05cf8ec9182b5647",
+        "7fe20795efc347be"
+      ]
+    ]
+  },
+  {
+    "id": "e0f814383ae12463",
+    "type": "function",
+    "z": "41d28c4710c1bc34",
+    "name": "event-to-CoT",
+    "func": "if (parseFloat(msg.payload.event[1]) === 0 && \nparseFloat(msg.payload.event[2]) === 0 || \nparseFloat(msg.payload.track[2]) === 0) {\n    return null;  // Drop the message\n}\nif (msg.payload.contact[0] && \nmsg.payload.contact[0].includes('-undefined')) {\n    return null; // Drop the message\n}\nconst start = new Date(Date.now()).toISOString();\nconst staleTime = new Date(Date.now() + ((2 * 60 * 1000))).toISOString();;\n\nmsg.payload = {\n    \"event\": {\n        \"_attributes\": {\n            \"version\": \"2.0\",\n            \"uid\": msg.payload.contact[0],\n            \"type\": msg.payload.event[7],\n            \"how\": \"m-p\",\n            \"time\": start,\n            \"start\": start,\n            \"stale\": staleTime,\n            \"access\": \"UNCLASSIFIED\"\n        },\n        \"point\" : {\n            \"_attributes\": {\n                \"lat\": msg.payload.event[1],\n                \"lon\": msg.payload.event[2],\n                \"hae\": msg.payload.event[3],\n                \"ce\": msg.payload.event[4],\n                \"le\": msg.payload.event[5]\n            }\n        },\n        \"detail\": {\n            \"track\": {\n                \"_attributes\": {\n                \"course\": msg.payload.track[1],\n                \"speed\": msg.payload.track[2],\n                \"slope\": \"999999.0\"\n                }\n            },\n            \"contact\": {\n                \"_attributes\": {\n                    \"callsign\": msg.payload.contact[0]\n                }\n            },\n            \"remarks\": msg.payload.contact[2] +\n            \"\\n#OSINT_ADSB\"\n        }\n    }\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1290,
+    "y": 280,
+    "wires": [
+      [
+        "7a56f8185e1a51d2"
+      ]
+    ]
+  },
+  {
+    "id": "90dc90ad830970d6",
+    "type": "join",
+    "z": "41d28c4710c1bc34",
+    "name": "",
+    "mode": "custom",
+    "build": "merged",
+    "property": "payload",
+    "propertyType": "msg",
+    "key": "topic",
+    "joiner": "\\n",
+    "joinerType": "str",
+    "useparts": true,
+    "accumulate": false,
+    "timeout": "",
+    "count": "3",
+    "reduceRight": false,
+    "reduceExp": "",
+    "reduceInit": "",
+    "reduceInitType": "num",
+    "reduceFixup": "",
+    "x": 1130,
+    "y": 280,
+    "wires": [
+      [
+        "e0f814383ae12463"
+      ]
+    ]
+  },
+  {
+    "id": "ad627217377c9a41",
+    "type": "tcp out",
+    "z": "41d28c4710c1bc34",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "0b2d736cdab20def",
+    "x": 1400,
+    "y": 360,
+    "wires": []
+  },
+  {
+    "id": "3bfb202a2fa94f72",
+    "type": "catch",
+    "z": "41d28c4710c1bc34",
+    "name": "",
+    "scope": null,
+    "uncaught": false,
+    "x": 140,
+    "y": 160,
+    "wires": [
+      [
+        "d6c437bbbd900373"
+      ]
+    ]
+  },
+  {
+    "id": "d6c437bbbd900373",
+    "type": "debug",
+    "z": "41d28c4710c1bc34",
+    "name": "debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 270,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "7a56f8185e1a51d2",
+    "type": "delay",
+    "z": "41d28c4710c1bc34",
+    "name": "",
+    "pauseType": "rate",
+    "timeout": "5",
+    "timeoutUnits": "seconds",
+    "rate": "500",
+    "nbRateUnits": "1",
+    "rateUnits": "second",
+    "randomFirst": "1",
+    "randomLast": "5",
+    "randomUnits": "seconds",
+    "drop": false,
+    "allowrate": false,
+    "outputs": 1,
+    "x": 940,
+    "y": 360,
+    "wires": [
+      [
+        "47682351df0a57cc"
+      ]
+    ]
+  },
+  {
+    "id": "47682351df0a57cc",
+    "type": "tak",
+    "z": "41d28c4710c1bc34",
+    "name": "TAK",
+    "x": 1150,
+    "y": 360,
+    "wires": [
+      [
+        "ad627217377c9a41"
+      ],
+      [],
+      []
+    ]
+  },
+  {
+    "id": "f02d3a8cba391cfa",
+    "type": "debug",
+    "z": "41d28c4710c1bc34",
+    "name": "debug 6",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 740,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "05cf8ec9182b5647",
+    "type": "http request",
+    "z": "41d28c4710c1bc34",
+    "name": "Emergency Squak",
+    "method": "GET",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "https://opendata.adsb.fi/api/v2/sqk/7700",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 370,
+    "y": 400,
+    "wires": [
+      [
+        "f02d3a8cba391cfa",
+        "41d1aa7f3ed823af"
+      ]
+    ]
+  },
+  {
+    "id": "7fe20795efc347be",
+    "type": "http request",
+    "z": "41d28c4710c1bc34",
+    "name": "Wildfire Squak",
+    "method": "GET",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "https://opendata.adsb.fi/api/v2/sqk/1255",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 360,
+    "y": 460,
+    "wires": [
+      [
+        "41d1aa7f3ed823af"
+      ]
+    ]
+  },
+  {
+    "id": "0b2d736cdab20def",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

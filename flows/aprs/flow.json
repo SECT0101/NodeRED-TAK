@@ -1,0 +1,284 @@
+[
+  {
+    "id": "02d046dc07cfff12",
+    "type": "tab",
+    "label": "APRS Stations → TAK",
+    "disabled": false,
+    "info": "Live APRS stations in Tennessee (plus a small buffer): mobiles, digipeaters, iGates, objects and weather stations (wind and temperature in the remarks, in °F). Stations show as friendly.\n\nData: APRS-IS (aprs2.net) (https://www.aprs2.net/). Updates every live (as stations beacon).\n\nNeeds: [node-red-contrib-tcp-client](https://flows.nodered.org/node/node-red-contrib-tcp-client) (Manage palette > Install).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set APRS_CALLSIGN in the tab's Environment Variables to your callsign. The flow logs in receive-only (passcode -1), so no passcode is needed.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/aprs",
+    "env": [
+      {
+        "name": "APRS_CALLSIGN",
+        "value": "",
+        "type": "str"
+      }
+    ]
+  },
+  {
+    "id": "setupdc07cfff12",
+    "type": "comment",
+    "z": "02d046dc07cfff12",
+    "name": "SETUP - read me (double-click)",
+    "info": "Live APRS stations in Tennessee (plus a small buffer): mobiles, digipeaters, iGates, objects and weather stations (wind and temperature in the remarks, in °F). Stations show as friendly.\n\nData: APRS-IS (aprs2.net) (https://www.aprs2.net/). Updates every live (as stations beacon).\n\nNeeds: [node-red-contrib-tcp-client](https://flows.nodered.org/node/node-red-contrib-tcp-client) (Manage palette > Install).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set APRS_CALLSIGN in the tab's Environment Variables to your callsign. The flow logs in receive-only (passcode -1), so no passcode is needed.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/aprs",
+    "x": 150,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "c8b5b71e2e59d095",
+    "type": "inject",
+    "z": "02d046dc07cfff12",
+    "name": "START APRS-IS",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "2",
+    "topic": "",
+    "payload": "",
+    "payloadType": "str",
+    "x": 120,
+    "y": 100,
+    "wires": [
+      [
+        "e85facc7165a44f1"
+      ]
+    ]
+  },
+  {
+    "id": "e85facc7165a44f1",
+    "type": "function",
+    "z": "02d046dc07cfff12",
+    "name": "Connect to APRS-IS",
+    "func": "msg.action = \"connect\";\nmsg.host = \"rotate.aprs2.net\";\nmsg.port = 14580;\nreturn msg;",
+    "outputs": 1,
+    "x": 340,
+    "y": 100,
+    "wires": [
+      [
+        "de3d38f5c2f94b4b"
+      ]
+    ]
+  },
+  {
+    "id": "de3d38f5c2f94b4b",
+    "type": "tcp-client",
+    "z": "02d046dc07cfff12",
+    "action": "action",
+    "actionType": "msg",
+    "host": "rotate.aprs2.net",
+    "hostType": "str",
+    "port": "14580",
+    "portType": "str",
+    "datamode": "stream",
+    "datatype": "utf8",
+    "newline": "",
+    "write": "payload",
+    "writeType": "msg",
+    "maxRetries": "10",
+    "retryDelay": "5000",
+    "indefiniteRetries": true,
+    "topic": "",
+    "name": "APRS-IS TCP Client",
+    "debug": "warning",
+    "x": 660,
+    "y": 80,
+    "wires": [
+      [
+        "35c282ff8be1405e",
+        "2b359fc8940cab50"
+      ]
+    ]
+  },
+  {
+    "id": "a3828a9c8680d534",
+    "type": "function",
+    "z": "02d046dc07cfff12",
+    "name": "Send APRS-IS Login",
+    "func": "// Triggered by 'Split APRS Lines' whenever the APRS-IS server banner\n// arrives -- first connect and every auto-reconnect -- so the filter is\n// always re-applied. (Replaces the old one-shot login inject.)\nmsg.action = \"write\";\nvar call = (env.get(\"APRS_CALLSIGN\") || \"N0CALL\").toUpperCase();\n// pass -1 = receive-only login; no passcode needed\nmsg.payload = \"user \" + call + \" pass -1 vers NodeRED-TAK 1.1 filter a/36.68/-90.31/34.98/-81.65\\r\\n\";\nreturn msg;",
+    "outputs": 1,
+    "x": 340,
+    "y": 40,
+    "wires": [
+      [
+        "de3d38f5c2f94b4b"
+      ]
+    ]
+  },
+  {
+    "id": "35c282ff8be1405e",
+    "type": "function",
+    "z": "02d046dc07cfff12",
+    "name": "Split APRS Lines",
+    "func": "// Reassembles APRS-IS lines from the TCP stream.\n// Output 1: one msg per APRS packet line.\n// Output 2: login trigger -- fired every time the server banner arrives,\n//           i.e. on first connect AND on every automatic reconnect.\nvar data = String(msg.payload || \"\");\nvar buffer = (flow.get(\"aprsBuffer\") || \"\") + data;\nvar lines = buffer.split(/\\r?\\n/);\nvar tail = lines.pop() || \"\";\nif (tail.length > 4096) tail = \"\";          // guard against a runaway partial line\nflow.set(\"aprsBuffer\", tail);\nflow.set(\"aprsLastRx\", Date.now());\n\nvar out = [];\nvar login = null;\nfor (var i = 0; i < lines.length; i++) {\n    var line = lines[i].replace(/\\s+$/, \"\");\n    if (!line) continue;\n    // Banner may be glued to a stale partial line from the previous connection\n    var bm = line.match(/#\\s*(aprsc|javAPRSSrvr)\\b/i);\n    if (bm && (bm.index === 0 || line.substring(0, bm.index).indexOf(\":\") === -1) && !/\\d{2}:\\d{2}:\\d{2} GMT/.test(line)) {   // aprsc keep-alives (\"# aprsc ... 28 Oct 2026 23:28:18 GMT ...\") are not banners\n        login = { payload: \"login\" };\n        node.status({ fill: \"yellow\", shape: \"dot\", text: \"server banner - logging in\" });\n        continue;\n    }\n    if (line.charAt(0) === \"#\") {\n        if (/^#\\s*logresp/i.test(line)) {\n            node.status({ fill: \"green\", shape: \"dot\", text: line.substring(2, 70) });\n        }\n        continue;                            // keepalives / server comments\n    }\n    out.push({ payload: line });\n}\nreturn [out, login];",
+    "outputs": 2,
+    "x": 110,
+    "y": 200,
+    "wires": [
+      [
+        "6d18aeed8c70a11d"
+      ],
+      [
+        "a3828a9c8680d534"
+      ]
+    ],
+    "outputLabels": [
+      "APRS lines",
+      "login on banner"
+    ]
+  },
+  {
+    "id": "6d18aeed8c70a11d",
+    "type": "function",
+    "z": "02d046dc07cfff12",
+    "name": "Parse APRS Position",
+    "func": "// APRS-IS line -> msg.aprs\n// Handles: uncompressed + compressed positions (! = / @), objects (;),\n// items ()), Mic-E (Kenwood/Yaesu radios), third-party (}) wrappers.\n// Weather stations: wind dir/speed are stored as WEATHER data (msg.aprs.wx),\n// never as course/speed, so WX markers don't move.\n\nvar TN = { latMin: 34.98, latMax: 36.68, lonMin: -90.31, lonMax: -81.65 };\n\nvar line = String(msg.payload || \"\");\nif (!line || line.charAt(0) === \"#\") return null;\n\nfunction b91(s) { var v = 0; for (var i = 0; i < s.length; i++) { v = v * 91 + (s.charCodeAt(i) - 33); } return v; }\n\nfunction parseUncompressed(s) {\n    var m = s.match(/^(\\d{2})([\\d ]{2}\\.[\\d ]{2})([NS])([\\/\\\\0-9A-Z])(\\d{3})([\\d ]{2}\\.[\\d ]{2})([EW])(.)/);\n    if (!m) return null;\n    var lat = parseInt(m[1], 10) + parseFloat(m[2].replace(/ /g, \"0\")) / 60;   // spaces = position ambiguity\n    var lon = parseInt(m[5], 10) + parseFloat(m[6].replace(/ /g, \"0\")) / 60;\n    if (m[3] === \"S\") lat = -lat;\n    if (m[7] === \"W\") lon = -lon;\n    return { lat: lat, lon: lon, table: m[4], code: m[8], rest: s.substring(19), type: \"plain\" };\n}\n\nfunction parseCompressed(s) {\n    if (s.length < 13) return null;\n    var table = s.charAt(0);\n    if (!/[\\/\\\\A-Za-j]/.test(table)) return null;\n    var latS = s.substring(1, 5), lonS = s.substring(5, 9);\n    if (!/^[!-{]{4}$/.test(latS) || !/^[!-{]{4}$/.test(lonS)) return null;\n    var r = { lat: 90 - b91(latS) / 380926, lon: -180 + b91(lonS) / 190463,\n              table: table, code: s.charAt(9), rest: s.substring(13), type: \"compressed\",\n              course: null, speedKnots: null, altitudeFt: null };\n    if (s.charAt(10) !== \" \") {\n        var c = s.charCodeAt(10) - 33, sp = s.charCodeAt(11) - 33, t = s.charCodeAt(12) - 33;\n        if ((t & 0x18) === 0x10) {\n            r.altitudeFt = Math.pow(1.002, c * 91 + sp);           // GGA source: cs = altitude\n        } else if (c >= 0 && c <= 89) {\n            r.course = c * 4;\n            r.speedKnots = Math.pow(1.08, sp) - 1;\n        }\n    }\n    return r;\n}\n\nfunction parseMicE(dest, info) {\n    var d = dest.replace(/-\\d+$/, \"\");\n    if (d.length < 6 || info.length < 9) return null;\n    var digits = \"\", north = false, lonOff = 0, west = false;\n    for (var i = 0; i < 6; i++) {\n        var ch = d.charAt(i), v;\n        if (ch >= \"0\" && ch <= \"9\") v = ch.charCodeAt(0) - 48;\n        else if (ch >= \"A\" && ch <= \"J\") v = ch.charCodeAt(0) - 65;\n        else if (ch >= \"P\" && ch <= \"Y\") v = ch.charCodeAt(0) - 80;\n        else if (ch === \"K\" || ch === \"L\" || ch === \"Z\") v = 0;\n        else return null;\n        digits += v;\n        var hi = (ch >= \"P\" && ch <= \"Z\");\n        if (i === 3) north = hi;\n        if (i === 4) lonOff = hi ? 100 : 0;\n        if (i === 5) west = hi;\n    }\n    var lat = parseInt(digits.substring(0, 2), 10) + parseFloat(digits.substring(2, 4) + \".\" + digits.substring(4, 6)) / 60;\n    if (!north) lat = -lat;\n    var lonD = info.charCodeAt(1) - 28 + lonOff;\n    if (lonD >= 180 && lonD <= 189) lonD -= 80;\n    else if (lonD >= 190 && lonD <= 199) lonD -= 190;\n    var lonM = info.charCodeAt(2) - 28; if (lonM >= 60) lonM -= 60;\n    var lonH = info.charCodeAt(3) - 28;\n    var lon = lonD + (lonM + lonH / 100) / 60;\n    if (west) lon = -lon;\n    var sp = info.charCodeAt(4) - 28, dc = info.charCodeAt(5) - 28, se = info.charCodeAt(6) - 28;\n    var speed = sp * 10 + Math.floor(dc / 10); if (speed >= 800) speed -= 800;\n    var course = (dc % 10) * 100 + se; if (course >= 400) course -= 400;\n    var rest = info.substring(9), alt = null;\n    var am = rest.match(/^[\\x60'\\]>]?([!-{]{3})\\}/);\n    if (am) { alt = (b91(am[1]) - 10000) * 3.28084; rest = rest.substring(am[0].length); }\n    rest = rest.replace(/^[\\x60'\\]>]/, \"\").replace(/_.$/, \"\").replace(/[=^]$/, \"\");\n    return { lat: lat, lon: lon, table: info.charAt(8), code: info.charAt(7), rest: rest, type: \"mice\",\n             course: (course > 0 && course <= 360) ? course : null, speedKnots: speed, altitudeFt: alt };\n}\n\nfunction posAt(s) { return /^\\d/.test(s) ? parseUncompressed(s) : parseCompressed(s); }\n\nvar hm = line.match(/^([^>]+)>([^,:]+)[^:]*:([\\s\\S]*)$/);\nif (!hm) return null;\nvar sender = hm[1], dest = hm[2], info = hm[3];\n\nif (info.charAt(0) === \"}\") {                   // third-party: unwrap once\n    var inner = info.substring(1).match(/^([^>]+)>([^,:]+)[^:]*:([\\s\\S]*)$/);\n    if (!inner) return null;\n    sender = inner[1]; dest = inner[2]; info = inner[3];\n}\n\nvar dti = info.charAt(0), pos = null, objName = null, kind = \"station\";\nif (dti === \"!\" || dti === \"=\") pos = posAt(info.substring(1));\nelse if (dti === \"/\" || dti === \"@\") pos = posAt(info.substring(8));\nelse if (dti === \";\") {\n    if (info.length < 19 || info.charAt(10) === \"_\") return null;   // short or killed object\n    objName = info.substring(1, 10).trim(); kind = \"object\";\n    pos = posAt(info.substring(18));\n} else if (dti === \")\") {\n    var im = info.match(/^\\)([^!_]{3,9})([!_])/);\n    if (!im || im[2] === \"_\") return null;\n    objName = im[1].trim(); kind = \"item\";\n    pos = posAt(info.substring(im[0].length));\n} else if (dti === \"\\x60\" || dti === \"'\") {\n    pos = parseMicE(dest, info);\n} else {\n    var bang = info.indexOf(\"!\");                // spec allows '!' up to 40 chars in\n    if (bang > 0 && bang <= 40) pos = posAt(info.substring(bang + 1));\n}\nif (!pos || isNaN(pos.lat) || isNaN(pos.lon)) return null;\nif (pos.lat < TN.latMin || pos.lat > TN.latMax || pos.lon < TN.lonMin || pos.lon > TN.lonMax) return null;\n\n// Symbol table: '/' primary, anything else = alternate table (+ overlay char)\nvar table = pos.table, overlay = null;\nif (table !== \"/\" && table !== \"\\\\\") {\n    overlay = (pos.type === \"compressed\" && table >= \"a\" && table <= \"j\") ? String(table.charCodeAt(0) - 97) : table;\n    table = \"\\\\\";\n}\n\nvar rest = pos.rest || \"\";\nvar course = pos.course !== undefined ? pos.course : null;\nvar speedKnots = pos.speedKnots !== undefined ? pos.speedKnots : null;\nvar altitudeFt = pos.altitudeFt !== undefined ? pos.altitudeFt : null;\nvar isWx = (pos.code === \"_\");\nvar wx = null;\n\nif (pos.type === \"plain\") {\n    var ext = rest.match(/^([\\d .]{3})\\/([\\d .]{3})/);\n    if (ext) {\n        if (isWx || /^g/.test(rest.substring(7))) {\n            isWx = true;                         // weather: DDD/SSS = wind dir / mph\n            wx = { windDir: /^\\d{3}$/.test(ext[1]) ? parseInt(ext[1], 10) : null,\n                   windMph: /^\\d{3}$/.test(ext[2]) ? parseInt(ext[2], 10) : null };\n        } else if (/^\\d{3}$/.test(ext[1]) && /^\\d{3}$/.test(ext[2])) {\n            var c = parseInt(ext[1], 10);\n            course = (c > 0 && c <= 360) ? c : null;\n            speedKnots = parseInt(ext[2], 10);\n        }\n        rest = rest.substring(7);\n    } else {\n        rest = rest.replace(/^(PHG\\d{4}|RNG\\d{4}|DFS\\d{4})/, \"\");\n    }\n} else if (isWx && pos.type === \"compressed\") {\n    wx = { windDir: course, windMph: speedKnots !== null ? speedKnots * 1.15078 : null };\n}\nif (isWx) {\n    course = null; speedKnots = null;            // never a track for a weather station\n    wx = wx || {};\n    var blob = (rest.match(/^[cgstrpPhbLl#\\d .\\-]*/) || [\"\"])[0];\n    var g = blob.match(/g(\\d{3})/); if (g) wx.gustMph = parseInt(g[1], 10);\n    var t = blob.match(/t(-\\d{2}|\\d{3})/);       // APRS temps are already deg F (t068, t-05)\n    if (t) { var tf = parseInt(t[1], 10); if (tf >= -80 && tf <= 140) wx.tempF = tf; }\n    var h = blob.match(/h(\\d{2})/); if (h) { var hv = parseInt(h[1], 10); wx.humidity = hv === 0 ? 100 : hv; }\n    var b = blob.match(/b(\\d{5})/); if (b) wx.pressureMb = parseInt(b[1], 10) / 10;\n    var r = blob.match(/r(\\d{3})/); if (r) wx.rain1hIn = parseInt(r[1], 10) / 100;\n    rest = rest.substring(blob.length);\n}\n\nvar am2 = rest.match(/\\/A=(-?\\d{5,6})/);\nif (am2) { altitudeFt = parseInt(am2[1], 10); rest = rest.replace(am2[0], \"\"); }\n\nvar name = objName || sender;\nvar uid = (kind === \"station\" ? \"APRS-\" : \"APRS-OBJ-\") + name.replace(/[^A-Za-z0-9_-]/g, \"_\");\n\nmsg.aprs = {\n    callsign: name,\n    sender: sender,\n    kind: kind,\n    uid: uid,\n    lat: pos.lat,\n    lon: pos.lon,\n    hae: altitudeFt !== null ? altitudeFt * 0.3048 : 0,\n    altitudeFt: altitudeFt,\n    course: course,\n    speedKnots: speedKnots,\n    speedMs: speedKnots !== null ? speedKnots * 0.514444 : 0,\n    isWx: isWx,\n    wx: wx,\n    temperatureF: (wx && wx.tempF !== undefined) ? wx.tempF : null,\n    symbolTable: table,\n    symbolCode: pos.code,\n    symbolKey: table + pos.code,\n    overlay: overlay,\n    isFixed: isWx || kind !== \"station\" || !speedKnots || speedKnots < 1,\n    format: pos.type,\n    comment: rest.trim(),\n    raw: line,\n    received: Date.now()\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 350,
+    "y": 200,
+    "wires": [
+      [
+        "8e2f0f7597c8d031"
+      ]
+    ]
+  },
+  {
+    "id": "8e2f0f7597c8d031",
+    "type": "function",
+    "z": "02d046dc07cfff12",
+    "name": "Deduplicate",
+    "func": "// Drops repeats of an unchanged position, but lets a repeat through once\n// RESEND_MS has passed, so fixed stations (digis, iGates, WX, objects)\n// keep getting refreshed and never fall off the map.\nvar RESEND_MS = 10 * 60 * 1000;\nvar PRUNE_MS  = 3 * 60 * 60 * 1000;   // forget stations not heard for 3h\n\nvar a = msg.aprs;\nif (!a) return null;\n\nvar key = [\n    a.lat.toFixed(5), a.lon.toFixed(5), a.course,\n    a.speedKnots === null ? \"\" : Math.round(a.speedKnots),\n    a.altitudeFt === null ? \"\" : Math.round(a.altitudeFt),\n    a.wx ? JSON.stringify(a.wx) : \"\"\n].join(\"|\");\n\nvar now = Date.now();\nvar seen = context.get(\"seen\") || {};\nvar prev = seen[a.uid];\nif (prev && prev.k === key && (now - prev.t) < RESEND_MS) return null;\nseen[a.uid] = { k: key, t: now };\n\nvar n = (context.get(\"n\") || 0) + 1;\nif (n >= 500) {\n    n = 0;\n    for (var u in seen) { if (now - seen[u].t > PRUNE_MS) delete seen[u]; }\n}\ncontext.set(\"n\", n);\ncontext.set(\"seen\", seen);\nnode.status({ fill: \"green\", shape: \"dot\", text: Object.keys(seen).length + \" stations tracked\" });\nreturn msg;",
+    "outputs": 1,
+    "initialize": "// One-time cleanup of the old per-station \"last_<uid>\" flow keys\nvar removed = 0;\n(flow.keys() || []).forEach(function (k) {\n    if (k.indexOf(\"last_\") === 0) { flow.set(k, undefined); removed++; }\n});\nif (removed) node.log(\"Removed \" + removed + \" old APRS dedup keys from flow context\");",
+    "x": 570,
+    "y": 200,
+    "wires": [
+      [
+        "a29c893a43216453"
+      ]
+    ]
+  },
+  {
+    "id": "a29c893a43216453",
+    "type": "function",
+    "z": "02d046dc07cfff12",
+    "name": "APRS to TAK CoT",
+    "func": "let a = msg.aprs;\n\nif (!a) return null;\n\nfunction esc(v) {\n    return String(v == null ? \"\" : v)\n        .replace(/&/g, \"&amp;\")\n        .replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\")\n        .replace(/\"/g, \"&quot;\")\n        .replace(/'/g, \"&apos;\");\n}\n\nfunction iso(ms) {\n    return new Date(ms).toISOString();\n}\n\n// ============================================================\n// APRS SYMBOL → TAK TYPE\n// ============================================================\n\nlet symbolMap = {\n\n    // Ground vehicles (primary table)\n    \"/>\": { name: \"Car\", cot: \"a-f-G-E-V-C\" },\n    \"/j\": { name: \"Jeep\", cot: \"a-f-G-E-V-C\" },\n    \"/k\": { name: \"Truck\", cot: \"a-f-G-E-V-C\" },\n    \"/v\": { name: \"Van\", cot: \"a-f-G-E-V-C\" },\n    \"/u\": { name: \"Heavy Truck\", cot: \"a-f-G-E-V-C\" },\n    \"/<\": { name: \"Motorcycle\", cot: \"a-f-G-E-V-C\" },\n\n    // Aircraft (primary table)\n    \"/^\": { name: \"Aircraft\", cot: \"a-f-A-C-F\" },\n    \"/'\": { name: \"Small Aircraft\", cot: \"a-f-A-C-F\" },\n    \"/g\": { name: \"Glider\", cot: \"a-f-A-C-F\" },\n    \"/X\": { name: \"Helicopter\", cot: \"a-f-A-C-H\" },\n\n    // Maritime (primary table)\n    \"/s\": { name: \"Powerboat\", cot: \"a-f-S-X-R\" },\n    \"/Y\": { name: \"Yacht\", cot: \"a-f-S-X-R\" },\n\n    // Person (primary table)\n    \"/[\": { name: \"Person\", cot: \"a-f-G-U-C-I\" },\n\n    // Emergency / public safety (primary table)\n    \"/a\": { name: \"Ambulance\", cot: \"a-f-G-E-V-C\" },\n    \"/f\": { name: \"Fire Truck\", cot: \"a-f-G-E-V-C\" },\n    \"/P\": { name: \"Police\", cot: \"a-f-G-U-U-L-C\" },\n\n    // Infrastructure / radio (primary table) - verified against aprs.org symbol charts\n    \"/#\": { name: \"Digipeater\", cot: \"a-f-G-U-U-S-R-W\" },\n    \"/&\": { name: \"HF Gateway (iGate)\", cot: \"a-f-G-U-U-S-R-W\" },\n    \"/n\": { name: \"APRS Node\", cot: \"a-f-G-U-U-S-R-W\" },\n    \"/L\": { name: \"PC/Software Station\", cot: \"a-f-G-U-U-S\" },\n\n    // Weather (primary table) - corrected: \"_\" is the real weather symbol, not \"W\"\n    \"/_\": { name: \"Weather Station\", cot: \"a-f-G-E-S-E\" },\n    \"/U\": { name: \"Bus\", cot: \"a-f-G-E-V-C\" },\n\n    // Satellite (primary table)\n    \"/S\": { name: \"Satellite\", cot: \"a-f-P-S\" },\n\n    // Signal / net-control stations (alternate table) - true \"Signal Unit\" match\n    \"\\\\a\": { name: \"ARES/RACES/WinLink Station\", cot: \"a-f-G-U-U-S\" },\n\n    // Alternate-table / overlay versions (now parsed, e.g. \"D#\" overlay digis)\n    \"\\\\#\": { name: \"Digipeater\", cot: \"a-f-G-U-U-S-R-W\" },\n    \"\\\\&\": { name: \"Gateway (iGate)\", cot: \"a-f-G-U-U-S-R-W\" },\n    \"\\\\_\": { name: \"Weather Station\", cot: \"a-f-G-E-S-E\" },\n    \"\\\\>\": { name: \"Car\", cot: \"a-f-G-E-V-C\" }\n};\n\nlet symbolTable = a.symbolTable || \"/\";\nlet key = a.symbolKey || (symbolTable + a.symbolCode);\n\nlet symbol = symbolMap[key] || {\n    name: \"APRS Station\",\n    cot: \"a-f-G-U-U-S\"\n};\n\nlet cotType = symbol.cot;\nlet symbolName = symbol.name;\n// ============================================================\n// TIMES\n// ============================================================\n\nconst now = Date.now();\n\nconst staleSeconds = a.isFixed ? 3600 : 1800;   // fixed stations/WX/objects stay 60 min\n\nconst time = iso(now);\nconst stale = iso(now + staleSeconds * 1000);\n\n// ============================================================\n// MARKER LABEL\n// ============================================================\n\nlet labelParts = [\n    a.callsign\n];\n\nlabelParts.push(symbolName);\n\nif (\n    a.temperatureF !== null &&\n    a.temperatureF !== undefined\n) {\n    labelParts.push(\n        a.temperatureF + \"°F\"\n    );\n}\n\nif (\n    a.course !== null &&\n    a.course !== undefined\n) {\n    labelParts.push(\n        String(Math.round(a.course)).padStart(3, \"0\") + \"°\"\n    );\n}\n\nif (\n    a.speedKnots !== null &&\n    a.speedKnots !== undefined\n) {\n    labelParts.push(\n        Math.round(a.speedKnots * 1.15078) + \" mph\"\n    );\n}\n\nif (\n    a.altitudeFt !== null &&\n    a.altitudeFt !== undefined\n) {\n    labelParts.push(\n        Math.round(a.altitudeFt) + \" ft\"\n    );\n}\n\n// Weather: show wind in the label (never as a track)\nif (a.isWx && a.wx && a.wx.windMph !== null && a.wx.windMph !== undefined) {\n    labelParts.push(\"Wind \" +\n        (a.wx.windDir !== null && a.wx.windDir !== undefined ? String(a.wx.windDir).padStart(3, \"0\") + \"° \" : \"\") +\n        Math.round(a.wx.windMph) + \" mph\" +\n        (a.wx.gustMph !== undefined ? \" G\" + a.wx.gustMph : \"\"));\n}\n\nconst markerLabel = labelParts.join(\" | \");\n\n// ============================================================\n// TRACK\n// ============================================================\n\nlet track = \"\";\nif (a.isWx) { a.course = null; }   // weather stations never get a track\n\nif (\n    a.course !== null &&\n    a.course !== undefined\n) {\n\n    let speed = 0;\n\n    if (\n        a.speedMs !== null &&\n        a.speedMs !== undefined\n    ) {\n        speed = a.speedMs;\n    }\n\n    track =\n        '<track' +\n        ' course=\"' +\n        Number(a.course).toFixed(1) +\n        '\"' +\n        ' speed=\"' +\n        Number(speed).toFixed(2) +\n        '\"' +\n        '/>';\n}\n\n// ============================================================\n// REMARKS\n// ============================================================\n\nlet remarks = [];\n\nremarks.push(\n    \"APRS: \" + a.callsign\n);\n\nremarks.push(\n    \"Type: \" + symbolName\n);\n\nif (\n    a.temperatureF !== null &&\n    a.temperatureF !== undefined\n) {\n    remarks.push(\n        \"Temp: \" + a.temperatureF + \"°F\"\n    );\n}\n\nremarks.push(\n    \"Symbol: \" + (a.overlay || a.symbolTable) + a.symbolCode + (a.overlay ? \" (overlay \" + a.overlay + \")\" : \"\")\n);\n\nif (\n    a.course !== null &&\n    a.course !== undefined\n) {\n    remarks.push(\n        \"Course: \" +\n        Math.round(a.course) +\n        \"°\"\n    );\n}\n\nif (\n    a.speedKnots !== null &&\n    a.speedKnots !== undefined\n) {\n    remarks.push(\n        \"Speed: \" +\n        Math.round(a.speedKnots * 1.15078) +\n        \" mph\"\n    );\n}\n\nif (\n    a.altitudeFt !== null &&\n    a.altitudeFt !== undefined\n) {\n    remarks.push(\n        \"Altitude: \" +\n        Math.round(a.altitudeFt) +\n        \" ft\"\n    );\n}\n\nif (a.kind && a.kind !== \"station\") {\n    remarks.push(\"APRS \" + a.kind + \" posted by \" + a.sender);\n}\n\nif (a.isWx && a.wx) {\n    if (a.wx.windMph !== null && a.wx.windMph !== undefined) {\n        remarks.push(\"Wind: \" + (a.wx.windDir !== null && a.wx.windDir !== undefined ? a.wx.windDir + \"° @ \" : \"\") + Math.round(a.wx.windMph) + \" mph\");\n    }\n    if (a.wx.gustMph !== undefined) remarks.push(\"Gust: \" + a.wx.gustMph + \" mph\");\n    if (a.wx.humidity !== undefined) remarks.push(\"Humidity: \" + a.wx.humidity + \"%\");\n    if (a.wx.pressureMb !== undefined) remarks.push(\"Pressure: \" + a.wx.pressureMb.toFixed(1) + \" mb\");\n    if (a.wx.rain1hIn !== undefined) remarks.push(\"Rain 1h: \" + a.wx.rain1hIn.toFixed(2) + \" in\");\n}\n\nif (a.comment) {\n    remarks.push(\n        \"Comment: \" +\n        a.comment\n    );\n}\n\n// ============================================================\n// CoT\n// ============================================================\n\nconst cot =\n\n    '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n\n    '<event' +\n\n        ' version=\"2.0\"' +\n\n        ' uid=\"' +\n        esc(a.uid) +\n        '\"' +\n\n        ' type=\"' +\n        esc(cotType) +\n        '\"' +\n\n        ' how=\"m-g\"' +\n\n        ' time=\"' +\n        time +\n        '\"' +\n\n        ' start=\"' +\n        time +\n        '\"' +\n\n        ' stale=\"' +\n        stale +\n        '\">' +\n\n        '<point' +\n\n            ' lat=\"' +\n            Number(a.lat).toFixed(6) +\n            '\"' +\n\n            ' lon=\"' +\n            Number(a.lon).toFixed(6) +\n            '\"' +\n\n            ' hae=\"' +\n            Number(a.hae || 0).toFixed(1) +\n            '\"' +\n\n            ' ce=\"9999999.0\"' +\n\n            ' le=\"9999999.0\"' +\n\n        '/>' +\n\n        '<detail>' +\n\n            '<contact' +\n\n                ' callsign=\"' +\n                esc(markerLabel) +\n                '\"' +\n\n            '/>' +\n\n            (cotType === 'a-f-A-C-F' ?\n                '<usericon iconsetpath=\"66f14976-4b62-4023-8edb-d8d2ebeaa336/Public Safety Air/CIV_FIXED_CAP.png\"/>' :\n            cotType === 'a-f-A-C-H' ?\n                '<usericon iconsetpath=\"66f14976-4b62-4023-8edb-d8d2ebeaa336/Public Safety Air/CIV_ROTOR_ISR.png\"/>' :\n                '') +\n\n            '<color argb=\"-38476\"/>' +\n\n            track +\n\n            '<remarks>' +\n                esc(remarks.join(\" | \")) +\n            '</remarks>' +\n\n        '</detail>' +\n\n    '</event>\\r\\n';\n\nmsg.payload = cot;\n\nmsg.cot = cot;\n\nmsg.topic = a.callsign;\n\nmsg.aprsSymbol = a.symbolCode;\n\nmsg.aprsSymbolName = symbolName;\n\nmsg.cotType = cotType;\n\nreturn msg;",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 790,
+    "y": 200,
+    "wires": [
+      [
+        "512c8f2643bb0fb4",
+        "5eef807e46a88912"
+      ]
+    ]
+  },
+  {
+    "id": "512c8f2643bb0fb4",
+    "type": "debug",
+    "z": "02d046dc07cfff12",
+    "name": "TAK CoT Output",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "x": 1020,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "2b359fc8940cab50",
+    "type": "debug",
+    "z": "02d046dc07cfff12",
+    "name": "Raw APRS-IS",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "x": 340,
+    "y": 300,
+    "wires": []
+  },
+  {
+    "id": "c8d31343811d9a7d",
+    "type": "catch",
+    "z": "02d046dc07cfff12",
+    "name": "Errors",
+    "scope": null,
+    "uncaught": false,
+    "x": 770,
+    "y": 400,
+    "wires": [
+      [
+        "4f36a712415540aa"
+      ]
+    ]
+  },
+  {
+    "id": "4f36a712415540aa",
+    "type": "debug",
+    "z": "02d046dc07cfff12",
+    "name": "Flow Errors",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "x": 1010,
+    "y": 400,
+    "wires": []
+  },
+  {
+    "id": "5eef807e46a88912",
+    "type": "tcp out",
+    "z": "02d046dc07cfff12",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "f5599208bf1936ab",
+    "x": 1020,
+    "y": 240,
+    "wires": []
+  },
+  {
+    "id": "f5599208bf1936ab",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "p12": "",
+    "p12name": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": "",
+    "certEnv": "",
+    "keyEnv": "",
+    "caEnv": ""
+  }
+]

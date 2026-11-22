@@ -1,0 +1,323 @@
+[
+  {
+    "id": "nhc_prod_final_tab",
+    "type": "tab",
+    "label": "NHC Tropical Weather → TAK",
+    "disabled": false,
+    "info": "Active tropical storms and hurricanes from the National Hurricane Center: current positions, forecast tracks and cones.\n\nData: NOAA NHC map services (https://mapservices.weather.noaa.gov/tropical/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/nhc-tropical"
+  },
+  {
+    "id": "setup_final_tab",
+    "type": "comment",
+    "z": "nhc_prod_final_tab",
+    "name": "SETUP - read me (double-click)",
+    "info": "Active tropical storms and hurricanes from the National Hurricane Center: current positions, forecast tracks and cones.\n\nData: NOAA NHC map services (https://mapservices.weather.noaa.gov/tropical/). Updates every 15 minutes.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/nhc-tropical",
+    "x": 180,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "nhc_prod_manual",
+    "type": "inject",
+    "z": "nhc_prod_final_tab",
+    "name": "NHC POLL NOW",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 140,
+    "y": 160,
+    "wires": [
+      [
+        "nhc_prod_build"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_timer",
+    "type": "inject",
+    "z": "nhc_prod_final_tab",
+    "name": "AUTO - 15 MINUTES",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "900",
+    "crontab": "",
+    "once": true,
+    "onceDelay": 10,
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 160,
+    "y": 220,
+    "wires": [
+      [
+        "nhc_prod_build"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_build",
+    "type": "function",
+    "z": "nhc_prod_final_tab",
+    "name": "BUILD NOAA REQUESTS",
+    "func": "const base='https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather_summary/MapServer';\nconst layers=[\n {id:1,kind:'2day',name:'2-Day Outlook'},\n {id:2,kind:'7day',name:'7-Day Outlook'},\n {id:33,kind:'7motion',name:'7-Day Development Motion'},\n {id:3,kind:'7region',name:'7-Day Development Region'},\n {id:5,kind:'points',name:'Forecast Points'},\n {id:6,kind:'track',name:'Forecast Track'},\n {id:7,kind:'cone',name:'Forecast Cone'},\n {id:8,kind:'warning',name:'Watch-Warning'},\n {id:15,kind:'wind',name:'Forecast Wind Radii'}\n];\nmsg.payload=layers.map(l=>({\n url:`${base}/${l.id}/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson`,\n nhcLayer:l.id,\n nhcKind:l.kind,\n nhcName:l.name\n}));\nnode.status({fill:'blue',shape:'dot',text:'9 NOAA layers queued'});\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "x": 360,
+    "y": 60,
+    "wires": [
+      [
+        "nhc_prod_split"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_split",
+    "type": "split",
+    "z": "nhc_prod_final_tab",
+    "name": "SPLIT NOAA REQUESTS",
+    "splt": "\\n",
+    "spltType": "str",
+    "arraySplt": 1,
+    "arraySpltType": "len",
+    "stream": false,
+    "addname": "",
+    "property": "payload",
+    "x": 650,
+    "y": 60,
+    "wires": [
+      [
+        "nhc_prod_prepare"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_prepare",
+    "type": "function",
+    "z": "nhc_prod_final_tab",
+    "name": "PREPARE NOAA REQUEST",
+    "func": "if(!msg.payload || !msg.payload.url){ node.error('NOAA request missing payload.url',msg); return null; }\nmsg.url=msg.payload.url;\nmsg.nhcLayer=msg.payload.nhcLayer;\nmsg.nhcKind=msg.payload.nhcKind;\nmsg.nhcName=msg.payload.nhcName;\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "x": 920,
+    "y": 60,
+    "wires": [
+      [
+        "nhc_prod_http"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_http",
+    "type": "http request",
+    "z": "nhc_prod_final_tab",
+    "name": "NOAA NHC",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": true,
+    "headers": [
+      {
+        "keyType": "other",
+        "keyValue": "User-Agent",
+        "valueType": "other",
+        "valueValue": "Node-RED-NHC-TAK"
+      },
+      {
+        "keyType": "other",
+        "keyValue": "Accept",
+        "valueType": "other",
+        "valueValue": "application/geo+json,application/json"
+      }
+    ],
+    "x": 370,
+    "y": 280,
+    "wires": [
+      [
+        "nhc_prod_result",
+        "nhc_prod_convert"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_result",
+    "type": "function",
+    "z": "nhc_prod_final_tab",
+    "name": "NOAA RESULT SUMMARY",
+    "func": "const fc=msg.payload;\nconst count=fc&&Array.isArray(fc.features)?fc.features.length:0;\nmsg.nhcResult={layer:msg.nhcLayer,kind:msg.nhcKind,name:msg.nhcName,status:msg.statusCode,features:count};\nnode.status({fill:count?'green':'yellow',shape:'dot',text:`${msg.nhcName}: ${count} features`});\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "x": 620,
+    "y": 280,
+    "wires": [
+      [
+        "nhc_prod_result_debug"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_result_debug",
+    "type": "debug",
+    "z": "nhc_prod_final_tab",
+    "name": "NOAA SUMMARY",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": true,
+    "complete": "nhcResult",
+    "targetType": "msg",
+    "x": 770,
+    "y": 220,
+    "wires": []
+  },
+  {
+    "id": "nhc_prod_convert",
+    "type": "function",
+    "z": "nhc_prod_final_tab",
+    "name": "NHC -> PRODUCTION CoT",
+    "func": "const fc=msg.payload;\nif(!fc||fc.type!=='FeatureCollection')return null;\n\nconst RED=-65536;\nconst ORANGE=-23296;\nconst YELLOW=-256;\nconst GREEN=-16711936;\nconst FRED=1073741824;\nconst FORANGE=1073758208;\nconst FYELLOW=1073742080;\nconst NONE=0;\n\nfunction esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&apos;');}\nfunction safe(v){return String(v??'NHC').replace(/[^A-Za-z0-9_.:-]/g,'_').slice(0,70);}\nfunction time(){return new Date().toISOString();}\nfunction stale(){return new Date(Date.now()+20*60000).toISOString();}\nfunction prob(p){return p.prob7day??p.prob2day??p.probability??p.prob??'N/A';}\nfunction pct(v){const n=parseInt(String(v));return Number.isFinite(n)?n:0;}\n\nfunction point(uid,call,lat,lon,remarks,color,type='u-d-p'){\n const t=time();\n return `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<event version=\"2.0\" uid=\"${esc(uid)}\" type=\"${type}\" how=\"m-g\" time=\"${t}\" start=\"${t}\" stale=\"${stale()}\"><point lat=\"${Number(lat)}\" lon=\"${Number(lon)}\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/><detail><contact callsign=\"${esc(call)}\"/><remarks>${esc(remarks)}</remarks><color argb=\"${color}\"/><labels_on value=\"true\"/><marti><dest name=\"NWS\"/></marti></detail></event>\n`;\n}\n\nfunction coords(g){\n if(!g)return[];\n if(g.type==='LineString')return[g.coordinates];\n if(g.type==='MultiLineString')return g.coordinates||[];\n if(g.type==='Polygon')return g.coordinates||[];\n if(g.type==='MultiPolygon'){const a=[];for(const p of g.coordinates||[])for(const r of p||[])a.push(r);return a;}\n return[];\n}\n\nfunction shape(uid,call,c,remarks,closed,stroke,fill){\n if(!Array.isArray(c)||c.length<2)return null;\n const pts=c.filter(p=>Array.isArray(p)&&p.length>=2).map(p=>[Number(p[1]),Number(p[0])]).filter(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));\n if(pts.length<2)return null;\n if(closed){const a=pts[0],b=pts[pts.length-1];if(a[0]!==b[0]||a[1]!==b[1])pts.push(a);}\n const links=pts.map(p=>`<link point=\"${p[0]},${p[1]},0\"/>`).join('');\n const t=time();\n return `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<event version=\"2.0\" uid=\"${esc(uid)}\" type=\"u-d-f\" how=\"m-g\" time=\"${t}\" start=\"${t}\" stale=\"${stale()}\"><point lat=\"${pts[0][0]}\" lon=\"${pts[0][1]}\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/><detail><contact callsign=\"${esc(call)}\"/>${links}<strokeColor value=\"${stroke}\"/><strokeWeight value=\"4\"/><fillColor value=\"${fill}\"/><remarks>${esc(remarks)}</remarks><labels_on value=\"true\"/><marti><dest name=\"NWS\"/></marti></detail></event>\n`;\n}\n\nconst out=[];\nconst _seq={};\nfunction nextKey(k){_seq[k]=(_seq[k]||0)+1;return _seq[k];}\nconst features=fc.features||[];\nconst kind=msg.nhcKind;\n\nfor(let i=0;i<features.length;i++){\n const f=features[i]||{};\n const p=f.properties||{};\n const g=f.geometry||{};\n const basin=p.basin||'NHC';\n const oid = nextKey(kind + '|' + basin + '|' + (p.stormname || '')); // stable: Nth feature for this storm/layer (NOAA objectids change every advisory)\n\n if(kind==='2day'&&g.type==='Point'){\n  const lat=Number(g.coordinates[1]),lon=Number(g.coordinates[0]);\n  if(!Number.isFinite(lat)||!Number.isFinite(lon))continue;\n  const pr=p.prob2day||'N/A';\n  const n=pct(pr);\n  const color=n>=70?RED:n>=40?YELLOW:GREEN;\n  const remarks=`NOAA NHC 2-Day Outlook | Basin ${basin} | Probability ${pr} | Risk ${p.risk2day||'N/A'}`;\n  out.push({payload:point(`NHC-2DAY-${safe(basin)}-${oid}`,`NHC ${basin} 2D ${pr}`,lat,lon,remarks,color),nhc:{product:'2-Day Outlook',basin,probability:pr,lat,lon}});\n }\n\n if(kind==='7day'&&g.type==='Point'){\n  const lat=Number(g.coordinates[1]),lon=Number(g.coordinates[0]);\n  if(!Number.isFinite(lat)||!Number.isFinite(lon))continue;\n  const pr=p.prob7day||'N/A';\n  const n=pct(pr);\n  const color=n>=70?RED:n>=40?ORANGE:YELLOW;\n  const remarks=`NOAA NHC 7-Day Outlook | Basin ${basin} | Probability ${pr} | Risk ${p.risk7day||'N/A'}`;\n  out.push({payload:point(`NHC-7DAY-${safe(basin)}-${oid}`,`NHC ${basin} 7D ${pr}`,lat,lon,remarks,color),nhc:{product:'7-Day Outlook',basin,probability:pr,lat,lon}});\n }\n\n if(kind==='7region'){\n  const pr=p.prob7day||'N/A';\n  const n=pct(pr);\n  const stroke=n>=70?RED:n>=40?ORANGE:YELLOW;\n  const fill=n>=70?FRED:n>=40?FORANGE:FYELLOW;\n  const rs=coords(g);\n  for(let j=0;j<rs.length;j++){\n   const uid=`NHC-7REGION-${safe(basin)}-${oid}-${j}`;\n   const remarks=`NOAA NHC 7-Day Development Region | Basin ${basin} | Probability ${pr}`;\n   const cot=shape(uid,`NHC ${basin} DEV ${pr}`,rs[j],remarks,true,stroke,fill);\n   if(cot)out.push({payload:cot,nhc:{product:'7-Day Development Region',basin,probability:pr}});\n  }\n }\n\n if(kind==='7motion'){\n  const pr=p.prob7day||'N/A';\n  const n=pct(pr);\n  const stroke=n>=70?RED:n>=40?ORANGE:YELLOW;\n  for(let j=0;j<coords(g).length;j++){\n   const cot=shape(`NHC-7MOTION-${safe(basin)}-${oid}-${j}`,`NHC ${basin} MOTION ${pr}`,coords(g)[j],`NOAA NHC 7-Day Development Motion | Basin ${basin} | Probability ${pr}`,false,stroke,NONE);\n   if(cot)out.push({payload:cot,nhc:{product:'7-Day Development Motion',basin,probability:pr}});\n  }\n }\n\n if(kind==='points'&&g.type==='Point'){\n  const lat=Number(g.coordinates[1]),lon=Number(g.coordinates[0]);\n  if(!Number.isFinite(lat)||!Number.isFinite(lon))continue;\n  const storm=p.stormname||'NHC STORM';\n  const tau=Number(p.fcstprd??0);\n  const label=tau===0?'CURRENT':`+${tau}H`;\n  const wind=p.maxwind??'';\n  const gust=p.gust??'';\n  const remarks=`NOAA NHC Forecast Point | ${storm} | ${label}${wind!==''?' | Wind '+wind+' kt':''}${gust!==''?' | Gust '+gust+' kt':''}`;\n  out.push({payload:point(`NHC-POINT-${safe(basin)}-${safe(storm)}-${tau}`,`${storm} ${label}`,lat,lon,remarks,RED,'a-h-G'),nhc:{product:'Forecast Point',basin,storm,tau,lat,lon,wind,gust}});\n }\n\n if(kind==='track'){\n  const storm=p.stormname||'NHC STORM';\n  for(let j=0;j<coords(g).length;j++){\n   const cot=shape(`NHC-TRACK-${safe(basin)}-${safe(storm)}-${oid}-${j}`,`${storm} FORECAST TRACK`,coords(g)[j],`NOAA NHC Forecast Track | ${storm} | Basin ${basin}`,false,RED,NONE);\n   if(cot)out.push({payload:cot,nhc:{product:'Forecast Track',basin,storm}});\n  }\n }\n\n if(kind==='cone'){\n  const storm=p.stormname||'NHC STORM';\n  for(let j=0;j<coords(g).length;j++){\n   const cot=shape(`NHC-CONE-${safe(basin)}-${safe(storm)}-${oid}-${j}`,`${storm} FORECAST CONE`,coords(g)[j],`NOAA NHC Forecast Cone | ${storm} | Basin ${basin}`,true,RED,FRED);\n   if(cot)out.push({payload:cot,nhc:{product:'Forecast Cone',basin,storm}});\n  }\n }\n\n if(kind==='warning'){\n  const storm=p.stormname||'NHC';\n  const ww=p.tcww||'WATCH/WARNING';\n  const stroke=ww==='HWR'||ww==='HWA'?RED:ww==='TWR'? -16776961:YELLOW;\n  for(let j=0;j<coords(g).length;j++){\n   const cot=shape(`NHC-WW-${safe(basin)}-${safe(storm)}-${oid}-${j}`,`${storm} ${ww}`,coords(g)[j],`NOAA NHC ${ww} | ${storm} | Basin ${basin}`,false,stroke,NONE);\n   if(cot)out.push({payload:cot,nhc:{product:'Watch-Warning',basin,storm,warning:ww}});\n  }\n }\n\n if(kind==='wind'){\n  const storm=p.stormname||'NHC STORM';\n  for(let j=0;j<coords(g).length;j++){\n   const cot=shape(`NHC-WIND-${safe(basin)}-${safe(storm)}-${oid}-${j}`,`${storm} WIND RADII`,coords(g)[j],`NOAA NHC Forecast Wind Radii | ${storm} | Basin ${basin}`,true,ORANGE,FORANGE);\n   if(cot)out.push({payload:cot,nhc:{product:'Forecast Wind Radii',basin,storm}});\n  }\n }\n}\n\n// Remove objects that were sent last poll for this layer but are gone now\n// (storm dissipated, forecast point dropped, fewer wind radii, etc.)\nconst curUids=out.map(m=>{const r=/uid=\"([^\"]+)\"/.exec(m.payload);return r?r[1]:null;}).filter(Boolean);\nconst ctxKey='nhcUids_'+kind;\nconst prevUids=flow.get(ctxKey)||[];\nconst curSet=new Set(curUids);\nconst gone=prevUids.filter(u=>!curSet.has(u));\nfor(const u of gone){\n const t=time();\n const st=new Date(Date.now()+60000).toISOString();\n out.push({payload:`<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<event version=\"2.0\" uid=\"NHC-DEL-${esc(u)}\" type=\"t-x-d-d\" how=\"h-g-i-g-o\" time=\"${t}\" start=\"${t}\" stale=\"${st}\"><point lat=\"0\" lon=\"0\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/><detail><link uid=\"${esc(u)}\" relation=\"none\" type=\"none\"/><__forcedelete/></detail></event>\\n`,nhc:{product:'Delete',uid:u}});\n}\nflow.set(ctxKey,curUids);\nout.forEach(m=>{m.parts=msg.parts;m.nhcName=msg.nhcName;m.nhcKind=kind;});\n\nnode.status({fill:curUids.length?'green':'yellow',shape:curUids.length?'dot':'ring',text:`${msg.nhcName}: ${curUids.length} CoT, ${gone.length} removed`});\nreturn out.length?[out]:null;\n",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 340,
+    "y": 340,
+    "wires": [
+      [
+        "nhc_prod_event_debug",
+        "bb040bbb6e85aed8"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_event_debug",
+    "type": "debug",
+    "z": "nhc_prod_final_tab",
+    "name": "NHC EVENTS",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": true,
+    "complete": "nhc",
+    "targetType": "msg",
+    "statusVal": "nhc",
+    "statusType": "auto",
+    "x": 560,
+    "y": 380,
+    "wires": []
+  },
+  {
+    "id": "nhc_prod_send",
+    "type": "function",
+    "z": "nhc_prod_final_tab",
+    "name": "SEND TO TAK",
+    "func": "if(typeof msg.payload==='string')msg.payload=Buffer.from(msg.payload,'utf8');\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "x": 840,
+    "y": 340,
+    "wires": [
+      [
+        "bba806502c2ae087"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_catch",
+    "type": "catch",
+    "z": "nhc_prod_final_tab",
+    "name": "NHC ERRORS",
+    "scope": null,
+    "uncaught": false,
+    "x": 360,
+    "y": 440,
+    "wires": [
+      [
+        "nhc_prod_error_debug"
+      ]
+    ]
+  },
+  {
+    "id": "nhc_prod_error_debug",
+    "type": "debug",
+    "z": "nhc_prod_final_tab",
+    "name": "NHC ERROR DETAILS",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": true,
+    "complete": "true",
+    "targetType": "full",
+    "x": 570,
+    "y": 440,
+    "wires": []
+  },
+  {
+    "id": "bba806502c2ae087",
+    "type": "tcp out",
+    "z": "nhc_prod_final_tab",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "8a04d5b5ccc1b614",
+    "x": 1120,
+    "y": 340,
+    "wires": []
+  },
+  {
+    "id": "bb040bbb6e85aed8",
+    "type": "function",
+    "z": "nhc_prod_final_tab",
+    "name": "NHC EVENT SUMMARY",
+    "func": "// NHC EVENT SUMMARY\n// Counts events for the CURRENT poll only.\n// Passes the original CoT message through unchanged.\n\nconst layer = msg.nhcName || msg.nhcKind || \"Unknown\";\n\n// The nine NOAA requests are split messages.\n// Each poll gets a new msg.parts.id.\nconst pollId = msg.parts && msg.parts.id\n    ? msg.parts.id\n    : null;\n\nlet state = flow.get(\"nhcCurrentPoll\");\n\n// Start a new counter when a new poll begins.\nif (!state || state.pollId !== pollId) {\n    state = {\n        pollId: pollId,\n        total: 0,\n        layers: {}\n    };\n}\n\n// Count this event.\nstate.total += 1;\n\nif (!state.layers[layer]) {\n    state.layers[layer] = 0;\n}\n\nstate.layers[layer] += 1;\n\nflow.set(\"nhcCurrentPoll\", state);\n\n// Add summary information without changing the CoT payload.\nmsg.nhcSummary = {\n    pollId: state.pollId,\n    layer: layer,\n    layerCount: state.layers[layer],\n    totalEventsThisPoll: state.total\n};\n\n// Node status.\nnode.status({\n    fill: \"green\",\n    shape: \"dot\",\n    text: `NHC: ${state.total} events this poll`\n});\n\n// Pass original CoT unchanged to TAK.\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 630,
+    "y": 340,
+    "wires": [
+      [
+        "nhc_prod_send"
+      ]
+    ]
+  },
+  {
+    "id": "8a04d5b5ccc1b614",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

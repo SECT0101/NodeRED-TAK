@@ -1,0 +1,120 @@
+[
+  {
+    "id": "e13f7ba3e4944daa",
+    "type": "tab",
+    "label": "FEMA Disaster Declarations → TAK",
+    "disabled": false,
+    "info": "Tennessee counties under an ongoing FEMA declaration from the last 365 days, drawn as county outlines: major disaster red, emergency orange, fire management yellow.\n\nData: OpenFEMA and Census TIGERweb (https://www.fema.gov/about/openfema/data-sets). Updates every 6 hours.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/fema-disaster-declarations"
+  },
+  {
+    "id": "setupa3e4944daa",
+    "type": "comment",
+    "z": "e13f7ba3e4944daa",
+    "name": "SETUP - read me (double-click)",
+    "info": "Tennessee counties under an ongoing FEMA declaration from the last 365 days, drawn as county outlines: major disaster red, emergency orange, fire management yellow.\n\nData: OpenFEMA and Census TIGERweb (https://www.fema.gov/about/openfema/data-sets). Updates every 6 hours.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/fema-disaster-declarations",
+    "x": 370,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "3249aa5e5018d08a",
+    "type": "inject",
+    "z": "e13f7ba3e4944daa",
+    "name": "Every 6 h",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "21600",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "20",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 330,
+    "y": 120,
+    "wires": [
+      [
+        "d38bfb1591ca3e96"
+      ]
+    ]
+  },
+  {
+    "id": "d38bfb1591ca3e96",
+    "type": "function",
+    "z": "e13f7ba3e4944daa",
+    "name": "Declarations / county routing + CoT",
+    "func": "function esc(s) { return String(s == null ? \"\" : s).replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\").replace(/'/g, \"&apos;\"); }\nfunction localTime(t) { const d = new Date(t); return isNaN(d) ? String(t || \"\") : d.toLocaleString(\"en-US\", { timeZone: \"America/Chicago\", month: \"short\", day: \"numeric\", hour: \"numeric\", minute: \"2-digit\", timeZoneName: \"short\" }); }\nfunction cotEvent(uid, type, lat, lon, staleMs, inner) {\n    const now = new Date(); const t = now.toISOString(); const st = new Date(now.getTime() + staleMs).toISOString();\n    return '<?xml version=\"1.0\" standalone=\"yes\"?><event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"' + type + '\" time=\"' + t + '\" start=\"' + t + '\" stale=\"' + st + '\" how=\"h-g-i-g-o\">' +\n        '<point lat=\"' + Number(lat).toFixed(5) + '\" lon=\"' + Number(lon).toFixed(5) + '\" hae=\"0\" ce=\"9999999\" le=\"9999999\"/><detail>' + inner + '</detail></event>';\n}\n// FEMA disaster declarations (OpenFEMA) for Tennessee -> county polygons.\n// Two-step: county boundaries (Census TIGERweb, cached 30 days) then declarations.\nconst LOOKBACK_DAYS = 365;   // declarations declared within this window whose incident is still ongoing are shown\nconst COUNTY_KEY = \"tn_county_polygons\";\nconst TIGER = \"https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?where=STATE%3D'47'&outFields=COUNTY,NAME&returnGeometry=true&maxAllowableOffset=0.01&outSR=4326&f=geojson\";\nfunction femaUrl() {\n    const since = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);\n    return \"https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=\" + encodeURIComponent(\"state eq 'TN' and declarationDate ge '\" + since + \"'\") + \"&$top=1000\";\n}\n// ---- step routing ----\nif (msg.step === undefined) {                       // from the timer\n    const cached = flow.get(COUNTY_KEY);\n    if (!cached || (Date.now() - cached.at) > 30 * 86400000) { return [null, { step: \"counties\", url: TIGER }]; }\n    return [null, { step: \"decl\", url: femaUrl() }];\n}\nif (msg.step === \"counties\") {\n    const feats = msg.payload && msg.payload.features;\n    if (!Array.isArray(feats) || !feats.length) { node.status({ fill: \"red\", shape: \"ring\", text: \"county boundary fetch failed\" }); return null; }\n    const polys = {};\n    feats.forEach(function (f) {\n        const g = f.geometry || {}; let ring = null;\n        if (g.type === \"Polygon\") { ring = g.coordinates[0]; }\n        else if (g.type === \"MultiPolygon\") { g.coordinates.forEach(function (p) { if (!ring || p[0].length > ring.length) { ring = p[0]; } }); }\n        if (ring) { polys[f.properties.COUNTY] = { name: f.properties.NAME, ring: ring }; }\n    });\n    flow.set(COUNTY_KEY, { at: Date.now(), polys: polys });\n    return [null, { step: \"decl\", url: femaUrl() }];\n}\n// ---- step \"decl\": build CoT ----\nconst list = msg.payload && msg.payload.DisasterDeclarationsSummaries;\nif (!Array.isArray(list)) { node.status({ fill: \"red\", shape: \"ring\", text: \"OpenFEMA fetch failed (HTTP \" + msg.statusCode + \")\" }); return null; }\nconst polys = (flow.get(COUNTY_KEY) || {}).polys || {};\nconst COLORS = { DR: { s: -3407872, f: 0x40CC0000 }, EM: { s: -26368, f: 0x40FF9900 }, FM: { s: -256, f: 0x40FFFF00 } };\nconst byCounty = {}; const seenDisasters = {};\nlist.forEach(function (d) {\n    if (d.disasterCloseoutDate) { return; }\n    // Active incidents only: incident period still open (no end date, or end date in the future)\n    if (d.incidentEndDate && Date.parse(d.incidentEndDate) < Date.now()) { return; }\n    const fips = String(d.fipsCountyCode || \"000\");\n    (byCounty[fips] = byCounty[fips] || []).push(d);\n    seenDisasters[d.disasterNumber] = true;\n});\nconst out = [];\nObject.keys(byCounty).forEach(function (fips) {\n    const ds = byCounty[fips].sort(function (a, b) { return a.declarationDate < b.declarationDate ? 1 : -1; });\n    const top = ds[0]; const typeKey = ds.some(function (d) { return d.declarationType === \"DR\"; }) ? \"DR\" : (ds.some(function (d) { return d.declarationType === \"EM\"; }) ? \"EM\" : (top.declarationType || \"DR\"));\n    const lines = ds.map(function (d) {\n        const progs = [d.iaProgramDeclared ? \"IA\" : \"\", d.paProgramDeclared ? \"PA\" : \"\", d.ihProgramDeclared ? \"IH\" : \"\", d.hmProgramDeclared ? \"HM\" : \"\"].filter(Boolean).join(\"/\");\n        return d.declarationType + \"-\" + d.disasterNumber + \" \" + d.declarationTitle + \" (\" + d.incidentType + \"; declared \" + String(d.declarationDate).slice(0, 10) + \"; incident \" + String(d.incidentBeginDate).slice(0, 10) + (d.incidentEndDate ? \" to \" + String(d.incidentEndDate).slice(0, 10) : \", ongoing\") + (progs ? \"; \" + progs : \"\") + \")\";\n    });\n    const remarks = esc(lines.join(\" | \") + \" | OpenFEMA\");\n    const label = (fips === \"000\" ? \"Tennessee (statewide)\" : (polys[fips] ? polys[fips].name : top.designatedArea)) + \" - \" + top.declarationType + \"-\" + top.disasterNumber + (ds.length > 1 ? \" +\" + (ds.length - 1) : \"\");\n    const uid = \"FEMA-DECL-47\" + fips;\n    const poly = polys[fips];\n    if (poly && poly.ring && poly.ring.length > 2) {\n        const pts = poly.ring.slice(); const c = COLORS[typeKey] || COLORS.DR;\n        let la = 0, lo = 0; pts.forEach(function (p) { la += p[1]; lo += p[0]; }); la /= pts.length; lo /= pts.length;\n        const links = pts.map(function (p) { return '<link point=\"' + p[1].toFixed(5) + \",\" + p[0].toFixed(5) + ',0\"/>'; }).join(\"\");\n        out.push({ payload: cotEvent(uid, \"u-d-f\", la, lo, 7 * 3600 * 1000,\n            '<contact callsign=\"' + esc(label) + '\"/>' + links +\n            '<strokeColor value=\"' + c.s + '\"/><strokeWeight value=\"2\"/><fillColor value=\"' + (c.f | 0) + '\"/><labels_on value=\"true\"/>' +\n            '<remarks>' + remarks + '</remarks>') });\n    } else {\n        // statewide / unknown county: marker at the State Capitol\n        out.push({ payload: cotEvent(uid, \"a-f-G\", 36.1659, -86.7844, 7 * 3600 * 1000,\n            '<contact callsign=\"' + esc(label) + '\"/><usericon iconsetpath=\"' + esc(\"de450cbf-2ffc-47fb-bd2b-ba2db89b035e/Natural Hazards/Hazard--Other.png\") + '\"/><remarks>' + remarks + '</remarks>') });\n    }\n});\nnode.status({ fill: out.length ? \"green\" : \"grey\", shape: \"dot\", text: out.length ? Object.keys(seenDisasters).length + \" active-incident declarations, \" + out.length + \" counties\" : \"no active-incident declarations\" });\nreturn [out, null];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 600,
+    "y": 120,
+    "wires": [
+      [
+        "08d8500bf045670c"
+      ],
+      [
+        "ecbf87bb768c4ac0"
+      ]
+    ]
+  },
+  {
+    "id": "ecbf87bb768c4ac0",
+    "type": "http request",
+    "z": "e13f7ba3e4944daa",
+    "name": "GET (TIGERweb counties / OpenFEMA)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 600,
+    "y": 220,
+    "wires": [
+      [
+        "d38bfb1591ca3e96"
+      ]
+    ]
+  },
+  {
+    "id": "08d8500bf045670c",
+    "type": "tcp out",
+    "z": "e13f7ba3e4944daa",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "3f85dfc6394a851f",
+    "x": 860,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "3f85dfc6394a851f",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

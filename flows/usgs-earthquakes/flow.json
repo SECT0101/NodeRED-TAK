@@ -1,0 +1,156 @@
+[
+  {
+    "id": "usgs_eq_tab",
+    "type": "tab",
+    "label": "USGS Earthquakes → TAK",
+    "disabled": false,
+    "info": "Earthquakes of any magnitude from the past hour, inside Tennessee (plus a small buffer).\n\nData: USGS earthquake GeoJSON feed (https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php). Updates every 60 seconds.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Channel name and CoT type are at the top of the Build CoT (TN bbox) function.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/usgs-earthquakes",
+    "env": []
+  },
+  {
+    "id": "setupsgs_eq_tab",
+    "type": "comment",
+    "z": "usgs_eq_tab",
+    "name": "SETUP - read me (double-click)",
+    "info": "Earthquakes of any magnitude from the past hour, inside Tennessee (plus a small buffer).\n\nData: USGS earthquake GeoJSON feed (https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php). Updates every 60 seconds.\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Channel name and CoT type are at the top of the Build CoT (TN bbox) function.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/usgs-earthquakes",
+    "x": 240,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "eq_inject",
+    "type": "inject",
+    "z": "usgs_eq_tab",
+    "name": "Every 60s (+ on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "60",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "3",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 200,
+    "y": 100,
+    "wires": [
+      [
+        "eq_http"
+      ]
+    ]
+  },
+  {
+    "id": "eq_http",
+    "type": "http request",
+    "z": "usgs_eq_tab",
+    "name": "GET USGS all_hour.geojson",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 490,
+    "y": 100,
+    "wires": [
+      [
+        "eq_split"
+      ]
+    ]
+  },
+  {
+    "id": "eq_split",
+    "type": "function",
+    "z": "usgs_eq_tab",
+    "name": "Split quake features",
+    "func": "var features = (msg.payload && msg.payload.features) || [];\nnode.status({ fill: 'blue', shape: 'dot', text: features.length + ' quakes in past hour (worldwide)' });\n\nvar msgs = features.map(function (f) {\n    return { quake: f };\n});\nreturn [msgs];\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 750,
+    "y": 100,
+    "wires": [
+      [
+        "eq_cot"
+      ]
+    ]
+  },
+  {
+    "id": "eq_cot",
+    "type": "function",
+    "z": "usgs_eq_tab",
+    "name": "Build CoT (TN bbox)",
+    "func": "// ---- config -----------------------------------------------------------\n// Same wider TN + overlap box used for the Lightning flow (a little north\n// of Bowling Green KY, south of Decatur AL, west past Jonesboro AR, east\n// past Asheville NC).\nvar TN_BBOX = { latMin: 34.3, latMax: 37.2, lonMin: -91.2, lonMax: -82.0 }; // var TN_BBOX = { latMin: 24.5, latMax: 49.5, lonMin: -125.0, lonMax: -66.5 };\n\n// NOT verified against a real ATAK-dropped marker -- same caveat as the\n// Lightning/NWS flows. Adjust once you've tested what actually renders\n// well (see the yellow-clover vs. spot-marker lesson from Lightning).\nvar cotType = \"b-m-p-s-m\";\nvar channelName = \"NWS\"; // set to your actual channel name\nvar staleHours = 1; // earthquakes stay operationally relevant longer than a lightning strike\n// -------------------------------------------------------------------------\n\nfunction esc(s) {\n    return String(s == null ? \"\" : s)\n        .replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\")\n        .replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\");\n}\n\nvar f = msg.quake;\nif (!f || !f.geometry || !f.geometry.coordinates) { return null; }\nvar p = f.properties || {};\n\nvar lon = f.geometry.coordinates[0];\nvar lat = f.geometry.coordinates[1];\nvar depthKm = f.geometry.coordinates[2];\n\nif (lat === undefined || lon === undefined) { return null; }\nif (lat < TN_BBOX.latMin || lat > TN_BBOX.latMax ||\n    lon < TN_BBOX.lonMin || lon > TN_BBOX.lonMax) {\n    return null;\n}\n\nvar now = new Date();\nvar eventTime = p.time ? new Date(p.time) : now;\nvar stale = new Date(now.getTime() + staleHours * 60 * 60 * 1000).toISOString();\n\nvar uid = \"usgs-eq-\" + (f.id || (p.time + \"-\" + lat.toFixed(3) + \"-\" + lon.toFixed(3)));\n\nvar remarksParts = [];\nremarksParts.push(p.title || (\"M\" + p.mag + \" earthquake\"));\nremarksParts.push(\"Magnitude: \" + p.mag + \" (\" + (p.magType || \"?\") + \")\");\nremarksParts.push(\"Depth: \" + depthKm + \" km\");\nif (p.place) { remarksParts.push(\"Location: \" + p.place); }\nif (p.tsunami) { remarksParts.push(\"TSUNAMI WARNING FLAG SET\"); }\nif (p.alert) { remarksParts.push(\"PAGER alert: \" + p.alert); }\nif (p.url) { remarksParts.push(\"Details: \" + p.url); }\n\nvar cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n    '<event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n    'time=\"' + eventTime.toISOString() + '\" start=\"' + eventTime.toISOString() + '\" stale=\"' + stale + '\">' +\n    '<point lat=\"' + lat.toFixed(6) + '\" lon=\"' + lon.toFixed(6) + '\" hae=\"' + (-1 * (depthKm || 0) * 1000).toFixed(0) + '\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n    '<detail>' +\n    '<contact callsign=\"' + esc(p.title || \"Earthquake\") + '\"/>' +\n    '<color value=\"-32768\"/>' +\n    '<remarks>' + esc(remarksParts.join(\" | \")) + '</remarks>' +\n    '<marti><dest name=\"' + esc(channelName) + '\"/></marti>' +\n    '</detail>' +\n    '</event>';\n\nmsg.payload = cot;\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1000,
+    "y": 100,
+    "wires": [
+      [
+        "eq_debug",
+        "b349d75b71906272"
+      ]
+    ]
+  },
+  {
+    "id": "eq_debug",
+    "type": "debug",
+    "z": "usgs_eq_tab",
+    "name": "CoT out (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1260,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "b349d75b71906272",
+    "type": "tcp out",
+    "z": "usgs_eq_tab",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "6f7f07db76d9de10",
+    "x": 1290,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "6f7f07db76d9de10",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

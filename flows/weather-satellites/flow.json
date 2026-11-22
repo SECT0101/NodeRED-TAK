@@ -1,0 +1,538 @@
+[
+  {
+    "id": "wxflow2_tab",
+    "type": "tab",
+    "label": "Weather Satellites → TAK",
+    "disabled": false,
+    "info": "Live positions of weather satellites that have an active image downlink (APT, LRPT, HRPT, HRIT), with their frequencies.\n\nData: Space-Track.org and SatNOGS DB (https://www.space-track.org/). Updates every 30 seconds (orbits refreshed every 6 hours).\n\nNeeds: A free [Space-Track.org](https://www.space-track.org/auth/createAccount) account; The satellite.js module (see *Satellite and GOES flows* in the main README).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set SPACETRACK_USER and SPACETRACK_PASS in the tab's Environment Variables (keep the password type as *credential*).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/weather-satellites",
+    "env": [
+      {
+        "name": "SPACETRACK_USER",
+        "value": "",
+        "type": "str"
+      },
+      {
+        "name": "SPACETRACK_PASS",
+        "type": "cred"
+      }
+    ]
+  },
+  {
+    "id": "setupxflow2_tab",
+    "type": "comment",
+    "z": "wxflow2_tab",
+    "name": "SETUP - read me (double-click)",
+    "info": "Live positions of weather satellites that have an active image downlink (APT, LRPT, HRPT, HRIT), with their frequencies.\n\nData: Space-Track.org and SatNOGS DB (https://www.space-track.org/). Updates every 30 seconds (orbits refreshed every 6 hours).\n\nNeeds: A free [Space-Track.org](https://www.space-track.org/auth/createAccount) account; The satellite.js module (see *Satellite and GOES flows* in the main README).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set SPACETRACK_USER and SPACETRACK_PASS in the tab's Environment Variables (keep the password type as *credential*).\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/weather-satellites",
+    "x": 200,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "wx2_img_inject",
+    "type": "inject",
+    "z": "wxflow2_tab",
+    "name": "Refresh imagery satellite list from SatNOGS (weekly + on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "604800",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "5",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 340,
+    "y": 60,
+    "wires": [
+      [
+        "wx2_img_build"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_img_build",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Build SatNOGS Imagery Query",
+    "func": "// Dropped server-side mode filtering (?mode=APT etc.) -- never confirmed\n// that query parameter actually works; SatNOGS' own filter API has a\n// documented history of silently returning nothing for filters beyond\n// status=. Fetching all active transmitters instead and filtering on the\n// confirmed real 'mode' field client-side in the merge step.\nvar msgs = [{\n    url: 'https://db.satnogs.org/api/transmitters/?status=active&format=json',\n    method: 'GET'\n}];\n\nnode.status({ fill: 'blue', shape: 'dot', text: 'querying all active transmitters' });\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 730,
+    "y": 60,
+    "wires": [
+      [
+        "wx2_img_http"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_img_http",
+    "type": "http request",
+    "z": "wxflow2_tab",
+    "name": "GET SatNOGS transmitters (imagery)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1030,
+    "y": 60,
+    "wires": [
+      [
+        "wx2_img_merge"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_img_merge",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Merge Imagery IDs + Radio Info",
+    "func": "// Confirmed real SatNOGS mode strings for weather-image downlink,\n// filtered here instead of via an unconfirmed query parameter.\nvar IMAGERY_MODES = ['APT', 'LRPT', 'HRPT', 'HRIT'];\n\nvar idSet = flow.get('wx_imagery_id_set') || {};\nvar radioMap = flow.get('wx_radio') || {};\nvar arr = Array.isArray(msg.payload) ? msg.payload : [];\n\narr.forEach(function (t) {\n    if (!t || !t.norad_cat_id) return;\n    if (IMAGERY_MODES.indexOf(t.mode) === -1) return; // not a confirmed imagery mode\n\n    idSet[t.norad_cat_id] = true;\n\n    if (!t.downlink_low) return;\n    var freqStr = t.mode + ' ' + (t.downlink_low / 1e6).toFixed(3) + ' MHz';\n\n    var list = radioMap[t.norad_cat_id] || [];\n    if (list.indexOf(freqStr) === -1) { list.push(freqStr); }\n    radioMap[t.norad_cat_id] = list;\n});\n\nflow.set('wx_imagery_id_set', idSet);\nflow.set('wx_radio', radioMap);\n\nvar ids = Object.keys(idSet).map(function (s) { return parseInt(s, 10); });\nflow.set('wx_imagery_ids', ids);\nnode.status({ fill: 'blue', shape: 'dot', text: ids.length + ' imagery-downlink satellites' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1370,
+    "y": 60,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "wx2_st_inject",
+    "type": "inject",
+    "z": "wxflow2_tab",
+    "name": "Refresh from Space-Track (every 6h + on deploy)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "21600",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "20",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 300,
+    "y": 180,
+    "wires": [
+      [
+        "wx2_circuit"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_circuit",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Circuit Gate (wx)",
+    "func": "var sourceName = 'spacetrack-wx';\nvar cooldownMinutes = 60;\nvar key = 'circuitBreaker_' + sourceName;\nvar state = flow.get(key) || { open: false, failCount: 0, openedAt: 0 };\n\nif (state.open) {\n    var elapsedMin = (Date.now() - state.openedAt) / 60000;\n    if (elapsedMin < cooldownMinutes) {\n        node.status({ fill: 'red', shape: 'ring', text: sourceName + ': OPEN (' + Math.round(cooldownMinutes - elapsedMin) + 'm left)' });\n        return null;\n    }\n    node.status({ fill: 'yellow', shape: 'dot', text: sourceName + ': testing recovery' });\n}\n\nmsg._circuitBreakerSource = sourceName;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 260,
+    "wires": [
+      [
+        "wx2_login_build"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_login_build",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Build Login Request",
+    "func": "var user = env.get('SPACETRACK_USER');\nvar pass = env.get('SPACETRACK_PASS');\nif (!user || !pass) {\n    node.status({ fill: 'red', shape: 'ring', text: 'Set SPACETRACK_USER/PASS in tab env vars' });\n    return null;\n}\nmsg.payload = 'identity=' + encodeURIComponent(user) + '&password=' + encodeURIComponent(pass);\nmsg.headers = { 'Content-Type': 'application/x-www-form-urlencoded' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 420,
+    "y": 260,
+    "wires": [
+      [
+        "wx2_login_post"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_login_post",
+    "type": "http request",
+    "z": "wxflow2_tab",
+    "name": "POST Login to Space-Track",
+    "method": "POST",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "https://www.space-track.org/ajaxauth/login",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 690,
+    "y": 260,
+    "wires": [
+      [
+        "wx2_extract_cookie"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_extract_cookie",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Extract Session Cookie",
+    "func": "var setCookie = msg.headers && msg.headers['set-cookie'];\nif (!setCookie || !setCookie.length) {\n    node.status({ fill: 'red', shape: 'ring', text: 'login failed -- no Set-Cookie received' });\n    node.error('Space-Track login: no Set-Cookie header in response (check SPACETRACK_USER/PASS)', msg);\n    return null;\n}\nvar cookieHeader = setCookie.map(function (c) { return c.split(';')[0]; }).join('; ');\nflow.set('spacetrack_session_cookie', cookieHeader);\nnode.status({ fill: 'green', shape: 'dot', text: 'session cookie captured' });\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 960,
+    "y": 260,
+    "wires": [
+      [
+        "wx2_build_query"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_build_query",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Build Space-Track query",
+    "func": "var NORAD_IDS = flow.get('wx_imagery_ids') || [];\nvar CHUNK_SIZE = 300;\n\nif (!NORAD_IDS.length) {\n    node.status({ fill: 'grey', shape: 'ring', text: 'waiting for first SatNOGS imagery refresh' });\n    return null;\n}\n\nvar cookie = flow.get('spacetrack_session_cookie');\nif (!cookie) {\n    node.status({ fill: 'red', shape: 'ring', text: 'no session cookie -- login step failed upstream' });\n    return null;\n}\n\nvar chunks = [];\nfor (var i = 0; i < NORAD_IDS.length; i += CHUNK_SIZE) {\n    chunks.push(NORAD_IDS.slice(i, i + CHUNK_SIZE));\n}\n\nvar msgs = chunks.map(function (chunk) {\n    var queryUrl = 'https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/' +\n        chunk.join(',') + '/orderby/NORAD_CAT_ID/format/json';\n    return {\n        url: queryUrl,\n        method: 'GET',\n        headers: { Cookie: cookie },\n        _circuitBreakerSource: msg._circuitBreakerSource\n    };\n});\n\nnode.status({ fill: 'blue', shape: 'dot', text: 'querying ' + NORAD_IDS.length + ' IDs in ' + msgs.length + ' request(s)' });\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1230,
+    "y": 260,
+    "wires": [
+      [
+        "wx2_gp_http"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_gp_http",
+    "type": "http request",
+    "z": "wxflow2_tab",
+    "name": "GET Space-Track query (session cookie)",
+    "method": "GET",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 260,
+    "y": 340,
+    "wires": [
+      [
+        "wx2_check_response"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_check_response",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Check Response",
+    "func": "var ERROR_CODES = [301, 400, 401, 403, 404, 429, 500, 502, 503, 504];\nvar TRIP_THRESHOLD = 1;\n\nvar sourceName = msg._circuitBreakerSource || node.id;\nvar key = 'circuitBreaker_' + sourceName;\nvar state = flow.get(key) || { open: false, failCount: 0, openedAt: 0 };\n\nvar code = msg.statusCode;\nvar bodyLooksLikeError = typeof msg.payload === 'string' &&\n    /error|invalid|denied/i.test(msg.payload.slice(0, 300));\nvar isError = ERROR_CODES.indexOf(code) !== -1 || bodyLooksLikeError;\n\nif (isError) {\n    state.failCount = (state.failCount || 0) + 1;\n    if (state.failCount >= TRIP_THRESHOLD) {\n        state.open = true;\n        state.openedAt = Date.now();\n        state.lastError = { code: code, at: new Date().toISOString() };\n        flow.set(key, state);\n        node.error('CIRCUIT BREAKER TRIPPED: ' + sourceName + ' returned HTTP ' + code + ' -- further queries blocked', msg);\n        node.status({ fill: 'red', shape: 'dot', text: sourceName + ': TRIPPED (HTTP ' + code + ')' });\n        return [null, { payload: { sourceName: sourceName, statusCode: code, failCount: state.failCount, timestamp: new Date().toISOString() } }];\n    }\n    flow.set(key, state);\n    node.warn(sourceName + ': error ' + code + ' (' + state.failCount + '/' + TRIP_THRESHOLD + ' before trip)');\n    return [null, null];\n}\n\nif (state.failCount > 0 || state.open) {\n    node.status({ fill: 'green', shape: 'dot', text: sourceName + ': recovered' });\n}\nflow.set(key, { open: false, failCount: 0, openedAt: 0 });\nreturn [msg, null];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 540,
+    "y": 380,
+    "wires": [
+      [
+        "wx2_parse_cache"
+      ],
+      [
+        "wx2_alert_cot"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_parse_cache",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Parse GP response + cache",
+    "func": "var arr = Array.isArray(msg.payload) ? msg.payload : [];\nvar newSats = [];\narr.forEach(function (o) {\n    if (o && o.TLE_LINE1 && o.TLE_LINE2) {\n        newSats.push({\n            name: o.OBJECT_NAME || ('NORAD ' + o.NORAD_CAT_ID),\n            line1: o.TLE_LINE1,\n            line2: o.TLE_LINE2,\n            noradId: String(o.NORAD_CAT_ID),\n            country: o.COUNTRY_CODE || 'UNKNOWN'\n        });\n    }\n});\n\n// Purge anything no longer in the current SatNOGS imagery ID list --\n// prevents satellites that dropped out (transmitter went inactive)\n// from lingering in wx_sats forever.\nvar currentIds = {};\n(flow.get('wx_imagery_ids') || []).forEach(function (id) { currentIds[String(id)] = true; });\n\nvar existing = flow.get('wx_sats') || [];\nvar map = {};\nexisting.forEach(function (s) { if (currentIds[s.noradId]) { map[s.noradId] = s; } });\nnewSats.forEach(function (s) { map[s.noradId] = s; });\nvar merged = Object.keys(map).map(function (k) { return map[k]; });\n\nflow.set('wx_sats', merged);\nnode.status({ fill: 'blue', shape: 'dot', text: merged.length + ' objects cached' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 830,
+    "y": 340,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "wx2_alert_cot",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Build Alert CoT",
+    "func": "var channelName = 'SystemAlerts';\nvar markerLat = 36.1627; var markerLon = -86.7816;\nvar staleMinutes = 60;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\n\nvar a = msg.payload;\nvar now = new Date(); var start = now.toISOString();\nvar stale = new Date(now.getTime() + staleMinutes * 60000).toISOString();\nvar uid = 'circuit-alert-' + a.sourceName;\nvar remarks = 'CIRCUIT BREAKER TRIPPED | Source: ' + a.sourceName + ' | HTTP ' + a.statusCode +\n    ' | Failures: ' + a.failCount + ' | Since: ' + a.timestamp + ' | Further queries blocked until cooldown expires';\nvar cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n    '<event version=\"2.0\" uid=\"' + esc(uid) + '\" type=\"b-m-p-s-m\" how=\"m-g\" ' +\n    'time=\"' + start + '\" start=\"' + start + '\" stale=\"' + stale + '\">' +\n    '<point lat=\"' + markerLat + '\" lon=\"' + markerLon + '\" hae=\"0\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n    '<detail><contact callsign=\"ALERT: ' + esc(a.sourceName) + '\"/><color value=\"-65536\"/>' +\n    '<remarks>' + esc(remarks) + '</remarks><marti><dest name=\"' + esc(channelName) + '\"/></marti></detail></event>';\nmsg.payload = cot;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 800,
+    "y": 420,
+    "wires": [
+      [
+        "f2d6c72c0e7e36b3"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_manual_reset",
+    "type": "inject",
+    "z": "wxflow2_tab",
+    "name": "MANUAL RESET (click to clear breaker)",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "spacetrack-wx",
+    "payload": "",
+    "payloadType": "date",
+    "x": 300,
+    "y": 500,
+    "wires": [
+      [
+        "wx2_clear_breaker"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_clear_breaker",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Clear breaker",
+    "func": "var sourceName = msg.topic;\nif (!sourceName) { node.warn('Set the inject node topic to the sourceName to reset'); return null; }\nflow.set('circuitBreaker_' + sourceName, { open: false, failCount: 0, openedAt: 0 });\nnode.warn('Circuit breaker manually cleared for: ' + sourceName);\nnode.status({ fill: 'green', shape: 'dot', text: sourceName + ': manually cleared' });\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 600,
+    "y": 500,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "wx2_prop_inject",
+    "type": "inject",
+    "z": "wxflow2_tab",
+    "name": "Propagate + emit (every 30s)",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "30",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "25",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 260,
+    "y": 600,
+    "wires": [
+      [
+        "wx2_propagate"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_propagate",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Propagate (SGP4) + build CoT",
+    "func": "var staleSeconds = 120;\n\nvar FRIENDLY = ['US','UK','FR','GERMANY','GER','IT','CANADA','CA',\n    'SPAIN','NETH','NETHERLANDS','BEL','NORWAY','DEN','POLAND','TURK',\n    'PORTUGAL','GREECE','CZCH','ROMANIA','HUNGARY','SVK','HRV','JPN','JAPAN','AUS','AUSTRALIA',\n    'ROK','SKOR','SKOREA','NZ','ESA','EUME','ISRA','MEX','RP','JOR','THAI','SAUD','SWTZ','IND','ARGN','INDO','MALA','BRAZ','SAFR','ISS','AB'];\nvar HOSTILE = ['CIS','RUSSIA','SU','PRC','CHN','CHINA','PRK','NKOR','NORTH KOREA','CUBA','VTNM','VIETNAM','LAOS'];\n\nvar sats = flow.get('wx_sats') || [];\nif (!sats.length) {\n    node.status({ fill: 'grey', shape: 'ring', text: 'waiting for first Space-Track refresh' });\n    return null;\n}\n\nvar now = new Date();\nvar startIso = now.toISOString();\nvar staleIso = new Date(now.getTime() + staleSeconds * 1000).toISOString();\nvar gmst = satellite.gstime(now);\n\nvar msgs = []; var errors = 0; var staleTle = 0;\n// Skip satellites whose element set is older than this: they are dead / re-entered\n// (Space-Track stops updating them) and propagate to wrong positions or fail.\nvar MAX_TLE_AGE_DAYS = 30;\nvar radioAll = flow.get('wx_radio') || {};\nsats.forEach(function (s) {\n    try {\n        var satrec = satellite.twoline2satrec(s.line1, s.line2);\n        var epochMs = (satrec.jdsatepoch + (satrec.jdsatepochF || 0) - 2440587.5) * 86400000;\n        if (!isFinite(epochMs) || (now.getTime() - epochMs) > MAX_TLE_AGE_DAYS * 86400000) { staleTle++; return; }\n        var pv = satellite.propagate(satrec, now);\n        if (!pv || !pv.position) { errors++; return; }\n        var geo = satellite.eciToGeodetic(pv.position, gmst);\n        var lat = satellite.degreesLat(geo.latitude);\n        var lon = satellite.degreesLong(geo.longitude);\n        var altKm = geo.height;\n\n        var cc = (s.country || 'UNKNOWN').toUpperCase();\n        var aff = 'u';\n        if (FRIENDLY.indexOf(cc) !== -1) { aff = 'f'; }\n        else if (HOSTILE.indexOf(cc) !== -1) { aff = 'h'; }\n\n        var funcLetter = 'S';\n        var cotExt = '';\n        var affLetter = (aff === 'f') ? 'F' : (aff === 'h') ? 'H' : 'U';\n        var cotType = 'a-' + aff + '-P-' + funcLetter + cotExt;\n        var sidc = 'S' + affLetter + 'P*' + funcLetter + '-----*****';\n        var uid = 'sat-' + s.noradId;\n\n        var radioList = radioAll[s.noradId];\n        var radio = (radioList && radioList.length) ? radioList.join(' | ') : null;\n        var remarks = 'NORAD ' + s.noradId + ' | Owner: ' + cc + ' | Alt: ' + altKm.toFixed(1) + ' km | Name: ' + s.name +\n            (radio ? ' | Imagery: ' + radio : '');\n\n        var cot = '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' +\n            '<event version=\"2.0\" uid=\"' + uid + '\" type=\"' + cotType + '\" how=\"m-g\" ' +\n            'time=\"' + startIso + '\" start=\"' + startIso + '\" stale=\"' + staleIso + '\">' +\n            '<point lat=\"' + lat.toFixed(6) + '\" lon=\"' + lon.toFixed(6) + '\" hae=\"' + (altKm * 1000).toFixed(0) + '\" ce=\"9999999.0\" le=\"9999999.0\"/>' +\n            '<detail>' +\n            '<contact callsign=\"' + s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '\"/>' +\n            '<remarks>' + remarks.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</remarks>' +\n            '<milsym id=\"' + sidc + '\"/>' +\n            '<milicon id=\"' + sidc + '\"/>' +\n            '</detail>' +\n            '</event>';\n\n        msgs.push({ payload: cot });\n    } catch (e) { errors++; }\n});\n\nnode.status({ fill: 'green', shape: 'dot', text: msgs.length + ' sats emitted' + (staleTle ? (', ' + staleTle + ' skipped (TLE > ' + MAX_TLE_AGE_DAYS + 'd old)') : '') + (errors ? (', ' + errors + ' errors') : '') });\nreturn [msgs];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [
+      {
+        "var": "satellite",
+        "module": "satellite.js"
+      }
+    ],
+    "x": 600,
+    "y": 600,
+    "wires": [
+      [
+        "wx2_cot_debug",
+        "c14f3d6952900ae5"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_cot_debug",
+    "type": "debug",
+    "z": "wxflow2_tab",
+    "name": "CoT out (debug)",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 980,
+    "y": 640,
+    "wires": []
+  },
+  {
+    "id": "wx2_debug_httpin",
+    "type": "http in",
+    "z": "wxflow2_tab",
+    "name": "GET /debug/wx-cache",
+    "url": "/debug/wx-cache",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 320,
+    "y": 720,
+    "wires": [
+      [
+        "wx2_debug_build"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_debug_build",
+    "type": "function",
+    "z": "wxflow2_tab",
+    "name": "Build debug response",
+    "func": "var sats = flow.get('wx_sats') || [];\nvar radioAll = flow.get('wx_radio') || {};\nvar breaker = flow.get('circuitBreaker_spacetrack-wx') || {};\nmsg.payload = JSON.stringify({\n    imagery_ids_count: (flow.get('wx_imagery_ids') || []).length,\n    cached_sats_count: sats.length,\n    breaker_open: !!breaker.open,\n    breaker_last_error: breaker.lastError || null,\n    objects: sats.map(function (s) {\n        return { name: s.name, noradId: s.noradId, country: s.country, radio: radioAll[s.noradId] || [] };\n    })\n}, null, 2);\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 580,
+    "y": 720,
+    "wires": [
+      [
+        "wx2_debug_resp"
+      ]
+    ]
+  },
+  {
+    "id": "wx2_debug_resp",
+    "type": "http response",
+    "z": "wxflow2_tab",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 820,
+    "y": 720,
+    "wires": []
+  },
+  {
+    "id": "f2d6c72c0e7e36b3",
+    "type": "tcp out",
+    "z": "wxflow2_tab",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "a20aac31b5d2dd21",
+    "x": 1070,
+    "y": 420,
+    "wires": []
+  },
+  {
+    "id": "c14f3d6952900ae5",
+    "type": "tcp out",
+    "z": "wxflow2_tab",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "a20aac31b5d2dd21",
+    "x": 1030,
+    "y": 540,
+    "wires": []
+  },
+  {
+    "id": "a20aac31b5d2dd21",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": ""
+  }
+]

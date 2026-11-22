@@ -1,0 +1,199 @@
+[
+  {
+    "id": "15def926c4ea968f",
+    "type": "tab",
+    "label": "Marinesia AIS Vessels → TAK",
+    "disabled": false,
+    "info": "Boats and ships on Tennessee rivers and lakes from AIS, with MIL-STD-2525 vessel symbols by type (tug, towing, pleasure craft, fishing, passenger and more), flag, destination and navigation status.\n\nData: Marinesia AIS API (https://marinesia.com/). Updates every 30 seconds.\n\nNeeds: Your own [Marinesia](https://marinesia.com/) API key (a free trial key allows 5 requests a minute).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set MARINESIA_API_KEY in the tab's Environment Variables (keep the type as *credential*). Don't share your key.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/ais-marinesia",
+    "env": [
+      {
+        "name": "MARINESIA_API_KEY",
+        "value": "",
+        "type": "cred"
+      }
+    ]
+  },
+  {
+    "id": "setup26c4ea968f",
+    "type": "comment",
+    "z": "15def926c4ea968f",
+    "name": "SETUP - read me (double-click)",
+    "info": "Boats and ships on Tennessee rivers and lakes from AIS, with MIL-STD-2525 vessel symbols by type (tug, towing, pleasure craft, fishing, passenger and more), flag, destination and navigation status.\n\nData: Marinesia AIS API (https://marinesia.com/). Updates every 30 seconds.\n\nNeeds: Your own [Marinesia](https://marinesia.com/) API key (a free trial key allows 5 requests a minute).\n\nSetup:\n1. Double-click TAK Server :8089, set your TAK Server address, then edit its TLS config and upload your client certificate and key.\n2. Set MARINESIA_API_KEY in the tab's Environment Variables (keep the type as *credential*). Don't share your key.\n3. Click Deploy.\n\nFull instructions: https://github.com/SECT0101/NodeRED-TAK/tree/main/flows/ais-marinesia",
+    "x": 190,
+    "y": 20,
+    "wires": []
+  },
+  {
+    "id": "64cd79471e9fd17f",
+    "type": "inject",
+    "z": "15def926c4ea968f",
+    "name": "Poll every 30s",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "30",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "2",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 150,
+    "y": 140,
+    "wires": [
+      [
+        "34d75594abf57910"
+      ]
+    ]
+  },
+  {
+    "id": "34d75594abf57910",
+    "type": "function",
+    "z": "15def926c4ea968f",
+    "name": "Set API URL & BBox",
+    "func": "// 1. CLEAR CACHE WIPE OBJECTS\ndelete msg.url;\ndelete msg.payload;\n\n// 2. RUNTIME CONFIGURATION\nconst apiKey = env.get(\"MARINESIA_API_KEY\");\nif (!apiKey) { node.status({ fill: \"red\", shape: \"ring\", text: \"set MARINESIA_API_KEY in the tab env\" }); return null; }\n// GEOGRAPHIC TRACKING BOUNDARIES FOR TENNESSEE (+20 MILE BUFFER)\nconst lat_min = \"33.5\";\nconst lat_max = \"38.0\";\nconst long_min = \"-92.5\"; \nconst long_max = \"-79.5\";\n\n// GEOGRAPHIC TRACKING BOUNDARIES Reach the Gulf coast\n// const lat_min = \"30.0\";\n// const lat_max = \"37.0\";\n// const long_min = \"-92.5\"; \n// const long_max = \"-81.3\";\n\n// 3. COMPILE URL SEGMENTS\nconst domainParts = [\"https://\", \"api\", \".marinesia.com\", \"/api/v2/vessel/area\"];\nconst baseUrl = domainParts.join(\"\");\n\n// 4. MAP DYNAMIC PARAMETERS TO MARINESIA PARSER FIELDS\nmsg.url = baseUrl + \"?lat_min=\" + lat_min + \"&lat_max=\" + lat_max + \"&long_min=\" + long_min + \"&long_max=\" + long_max + \"&key=\" + apiKey;\nmsg.method = \"GET\";\nmsg.headers = {\n    \"Accept\": \"application/json\"\n};\n\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 500,
+    "y": 140,
+    "wires": [
+      [
+        "5959cad63bbe72cf"
+      ]
+    ]
+  },
+  {
+    "id": "5959cad63bbe72cf",
+    "type": "http request",
+    "z": "15def926c4ea968f",
+    "name": "Marinesia API Request",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 880,
+    "y": 140,
+    "wires": [
+      [
+        "739ff4bda9dd0d69",
+        "af9dc391dbdce890"
+      ]
+    ]
+  },
+  {
+    "id": "739ff4bda9dd0d69",
+    "type": "splitter",
+    "z": "15def926c4ea968f",
+    "name": "Split Fleet Array",
+    "property": "payload.data",
+    "x": 160,
+    "y": 260,
+    "wires": [
+      [
+        "5bc6c1aa76e79ce7"
+      ]
+    ]
+  },
+  {
+    "id": "5bc6c1aa76e79ce7",
+    "type": "function",
+    "z": "15def926c4ea968f",
+    "name": "Marinesia JSON to CoT XML",
+    "func": "try {\n    function esc(s) {\n        return String(s == null ? \"\" : s)\n            .replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\")\n            .replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\").replace(/'/g, \"&apos;\");\n    }\n\n    // ---- 2525 Sea Surface function mapping ------------------------------\n    // Confirmed against the real MIL-STD-2525 Sea Surface function table\n    // (Surface/NON MILITARY branch a-.-S-X-*, and a-.-S-N-N-R for Rescue).\n    // Marinesia's `type` string is matched case-sensitively against what\n    // their API actually returns; unmapped/unknown types fall back to a\n    // bare Non-Military surface track ('X') rather than being mislabeled\n    // as Merchant, which is what EVERY vessel was getting before this fix.\n    var SHIP_TYPE_MAP = {\n        \"Tug\": \"X-M-T-U\",\n        \"Towing\": \"X-M-T-O\",\n        \"Pleasure Craft\": \"X-R\",\n        \"Fishing\": \"X-F\",\n        \"Passenger\": \"X-M-P\",\n        \"Cargo Ship\": \"X-M-C\",\n        \"Cargo\": \"X-M-C\",\n        \"Tanker\": \"X-M-O\",\n        \"Ferry\": \"X-M-F\",\n        \"Hazmat\": \"X-M-H\",\n        \"Law Enforcement\": \"X-L\",\n        \"Search and Rescue\": \"N-N-R\",\n        \"Dredge\": \"X-F-D-R\",\n        \"Trawler\": \"X-F-T-R\"\n        // \"Uncategorized\", \"Other Type\", and anything else not listed here\n        // fall back to bare \"X\" (Non-Military surface track) below.\n    };\n\n    // ---- Affiliation by flag state --------------------------------------\n    // Marinesia's `flag` field uses standard-ish 3-letter registry codes\n    // (e.g. \"USA\", \"MHL\"). This is a STARTER list, same pattern as the\n    // satellite/Winlink flows -- every CoT's remarks includes the raw flag\n    // code, so watch real traffic and extend these as needed.\n    var FRIENDLY_FLAGS = [\"USA\", \"GBR\", \"CAN\", \"FRA\", \"DEU\", \"ITA\", \"ESP\",\n        \"NLD\", \"BEL\", \"NOR\", \"DNK\", \"POL\", \"TUR\", \"PRT\", \"GRC\", \"CZE\",\n        \"ROU\", \"HUN\", \"SVK\", \"HRV\", \"JPN\", \"AUS\", \"KOR\", \"NZL\"];\n    var HOSTILE_FLAGS = [\"RUS\", \"CHN\", \"PRK\", \"CUB\", \"VNM\", \"LAO\"];\n\n    // ---- AIS navigational status codes (standard, 0-15) -----------------\n    var NAV_STATUS = {\n        0: \"Underway (engine)\", 1: \"At anchor\", 2: \"Not under command\",\n        3: \"Restricted maneuverability\", 4: \"Constrained by draught\",\n        5: \"Moored\", 6: \"Aground\", 7: \"Fishing\", 8: \"Underway (sailing)\",\n        12: \"Underway (sailing)\", 15: \"Not available\"\n    };\n\n    let vessel = msg.payload;\n\n    // Stop if data element is missing or incomplete\n    if (!vessel || !vessel.mmsi) return null;\n\n    let mmsi = vessel.mmsi;\n    // Extract ship name cleanly (or use fallback string if blank)\n    let shipName = vessel.name ? vessel.name.trim() : `MMSI: ${mmsi}`;\n\n    // API coordinate data mapping \n    let lat = vessel.lat;\n    let lon = vessel.lng; \n\n    // Block broken tracks from crashing your map engine\n    if (lat === undefined || lon === undefined) return null;\n\n    // Convert speed components (Knots to Meters per Second for TAK compliance)\n    // AIS \"not available\" values: SOG 102.3 kn, COG 360 -- treat as 0\n    let sogNum = Number(vessel.sog), cogNum = Number(vessel.cog);\n    let speedKnots = (isFinite(sogNum) && sogNum >= 0 && sogNum < 102.2) ? sogNum : 0.0;\n    let speedMetersPerSecond = speedKnots * 0.514444;\n    let headingDegrees = (isFinite(cogNum) && cogNum >= 0 && cogNum < 360) ? cogNum : 0.0;\n\n    // Set dynamic timestamps\n    let time = new Date().toISOString();\n\n    // EXTENDED CACHE WINDOW (CRUCIAL FOR LANDLOCKED WATERWAYS):\n    // River barges move very slowly and you poll every 5 minutes. \n    // Setting stale window to 20 minutes ensures icons stay locked on screen between updates.\n    let staleTime = new Date(Date.now() + 300000).toISOString(); \n\n    // ---- Coast Guard detection -------------------------------------------\n    // Marinesia's `type` field for CG cutters is often just \"Other Type\"\n    // (unhelpful), so detect via the vessel name instead -- US Coast Guard\n    // vessels consistently broadcast names starting with \"CG \" or \"USCGC \"\n    // (e.g. \"CG OUACHITA\" = USCGC Ouachita).\n    let isCoastGuard = /^(USCGC|USCG|CG)\\b/i.test(shipName);\n\n    // ---- Determine affiliation from flag ---------------------------------\n    let flagRaw = (vessel.flag || \"UNKNOWN\").toUpperCase();\n    let aff = \"u\";\n    if (FRIENDLY_FLAGS.indexOf(flagRaw) !== -1) aff = \"f\";\n    else if (HOSTILE_FLAGS.indexOf(flagRaw) !== -1) aff = \"h\";\n    if (isCoastGuard) { aff = \"f\"; } // government vessel -- friendly regardless of flag-list matching\n\n    // ---- Determine 2525 function suffix from ship type --------------------\n    let shipTypeRaw = vessel.type || \"Uncategorized\";\n    let funcSuffix;\n    if (isCoastGuard) {\n        // Naval/Military branch ('N') instead of Non-Military ('X') --\n        // same branch letter already confirmed and in use for Search and\n        // Rescue above, just without a more specific sub-function since\n        // Marinesia gives us nothing more granular to go on for CG cutters.\n        funcSuffix = \"N\";\n    } else {\n        funcSuffix = SHIP_TYPE_MAP[shipTypeRaw] || \"X-R\";   // unmapped -> Pleasure Craft (civilian styling in CloudTAK)\n    }\n\n    let cotType = funcSuffix ? (\"a-\" + aff + \"-S-\" + funcSuffix) : (\"a-\" + aff + \"-S\");\n\n    // ---- Build remarks with the extra context now available ---------------\n    let remarksParts = [];\n    remarksParts.push(\"Type: \" + shipTypeRaw);\n    if (isCoastGuard) { remarksParts.push(\"US Coast Guard (detected by name)\"); }\n    remarksParts.push(\"Flag: \" + flagRaw);\n    if (vessel.status !== undefined && vessel.status !== null) {\n        let statusLabel = NAV_STATUS[vessel.status] || (\"Code \" + vessel.status);\n        remarksParts.push(\"Status: \" + statusLabel);\n    }\n    if (vessel.dest) remarksParts.push(\"Dest: \" + vessel.dest);\n    if (vessel.draught) remarksParts.push(\"Draught: \" + vessel.draught + \"m\");\n    let remarks = remarksParts.join(\" | \");\n\n    let cotXml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n` +\n                 `<event version=\"2.0\" uid=\"AIS-${mmsi}\" type=\"${cotType}\" time=\"${time}\" start=\"${time}\" stale=\"${staleTime}\" how=\"m-g\" access=\"P\">\\n` +\n                 `  <point lat=\"${lat}\" lon=\"${lon}\" hae=\"0.0\" ce=\"10.0\" le=\"10.0\"/>\\n` +\n                 `  <detail>\\n` +\n                 `    <contact callsign=\"${esc(shipName)}\"/>\\n` +\n                 `    <track speed=\"${speedMetersPerSecond.toFixed(2)}\" course=\"${headingDegrees.toFixed(1)}\"/>\\n` +\n                 `    <remarks>${esc(remarks)}</remarks>\\n` +\n                 `  </detail>\\n` +\n                 `</event>\\n`;\n\n    msg.payload = cotXml;\n    return msg;\n\n} catch (e) {\n    node.error(\"Marinesia CoT Conversion Exception: \" + e.message);\n    return null;\n}",
+    "outputs": 1,
+    "timeout": "",
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 420,
+    "y": 260,
+    "wires": [
+      [
+        "f4584e5bb2c1f9de",
+        "828882edec33260a"
+      ]
+    ]
+  },
+  {
+    "id": "f4584e5bb2c1f9de",
+    "type": "debug",
+    "z": "15def926c4ea968f",
+    "name": "Marinesia Debug",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 680,
+    "y": 320,
+    "wires": []
+  },
+  {
+    "id": "828882edec33260a",
+    "type": "tcp out",
+    "z": "15def926c4ea968f",
+    "name": "TAK Server :8089",
+    "host": "tak.example.com",
+    "port": "8089",
+    "beserver": "client",
+    "base64": false,
+    "end": false,
+    "tls": "2427c76856881b29",
+    "x": 810,
+    "y": 240,
+    "wires": []
+  },
+  {
+    "id": "af9dc391dbdce890",
+    "type": "debug",
+    "z": "15def926c4ea968f",
+    "name": "debug 4",
+    "active": false,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 840,
+    "y": 60,
+    "wires": []
+  },
+  {
+    "id": "2427c76856881b29",
+    "type": "tls-config",
+    "name": "TAK Server client cert",
+    "cert": "",
+    "key": "",
+    "p12": "",
+    "p12name": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "",
+    "servername": "",
+    "verifyservercert": false,
+    "alpnprotocol": "",
+    "certEnv": "",
+    "keyEnv": "",
+    "caEnv": ""
+  }
+]
